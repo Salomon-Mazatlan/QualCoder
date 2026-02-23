@@ -35,6 +35,7 @@ import shutil
 import sys
 import sqlite3
 import urllib.request
+import urllib.error as urllib_err
 import webbrowser
 from copy import copy
 import time
@@ -106,7 +107,7 @@ if not os.path.exists(home + '/.qualcoder'):
         print(f"Cannot add .qualcoder folder to home folder\n{e}")
         raise
 logfile = home + '/.qualcoder/QualCoder.log'
-log_maxBytes = 500000 # 500 KB: max length of the logfile before old entries are discarded
+log_maxBytes = 500000  # 500 KB: max length of the logfile before old entries are discarded
 # Hack for Windows 10 PermissionError that stops the rotating file handler, will produce massive files.
 try:
     log_file = open(logfile, "r")
@@ -115,7 +116,7 @@ try:
     if len(data) > log_maxBytes:
         os.remove(logfile)
         log_file = open(logfile, "w")
-        log_file.write(data[len(data) - (log_maxBytes // 2):]) # frees up half of log_maxBytes
+        log_file.write(data[len(data) - (log_maxBytes // 2):])  # frees up half of log_maxBytes
         log_file.close()
 except Exception as e:
     print(e)
@@ -613,12 +614,12 @@ class App(object):
             codes.append(dict(zip(keys, row)))
         return codes, categories
     
-    def check_bad_file_links(self, id=None):
+    def check_bad_file_links(self, id_=None):
         """ Check all linked files are present.
         Will not state a bad link to an internally created text file.
         Called from MainWindow.open_project, Manage_files, view_av.
         Args:
-            id : Integer or none for a specific file
+            id_ : Integer or none for a specific file
          Returns:
              dictionary of id,name, mediapath for bad links
          """
@@ -628,9 +629,9 @@ class App(object):
                 or substr(mediapath,1,5) = 'docs:' \
                 or substr(mediapath,1,7) = 'images:' \
                 or substr(mediapath,1,6) = 'video:' order by name"
-        if id is not None:
+        if id_ is not None:
             sql = "select id, name, mediapath from source where id=?"
-            cur.execute(sql, [id])
+            cur.execute(sql, [id_])
         else:
             cur.execute(sql)
         result = cur.fetchall()
@@ -1191,7 +1192,7 @@ class App(object):
             res = cur.fetchone()
             if res is not None and res[0] is not None:
                 return res[0]                   
-        except sqlite3.OperationalError: # db vers. 1-4 did not have codername in project table
+        except sqlite3.OperationalError:  # db vers. 1-4 did not have codername in project table
             return ""
         
     def update_coder_names(self):
@@ -1208,7 +1209,7 @@ class App(object):
         """
         if self.conn is None:
             return
-        system_coder_names = [speaker_coder_name] # in the future, we could add '🤖 AI' to the list, and more...
+        system_coder_names = [speaker_coder_name]  # in the future, we could add '🤖 AI' to the list, and more...
         
         cur = self.conn.cursor()
         initial_changes = self.conn.total_changes
@@ -1311,7 +1312,9 @@ class App(object):
             if self.conn.total_changes != initial_changes:
                 self.delete_backup = False
             self.conn.commit()
-        except:
+        except Exception as err:
+            logger.error(err)
+            print(err)
             self.conn.rollback()
             raise
     
@@ -1393,7 +1396,7 @@ class App(object):
         lang = self.settings['language']
         try:
             urllib.request.urlopen(f"https://qualcoder-org.github.io/doc/{lang}/{page_path}")
-        except urllib.error.HTTPError as err:
+        except urllib_err.HTTPError as err:
             logger.warning(f"App.help_wiki:\nhttps://qualcoder-org.github.io/doc/{lang}/{page_path}\n{err}")
             if err.code == 404:
                 lang = "en"
@@ -1485,10 +1488,10 @@ Click "Yes" to start now.')
                 self.app.ai.init_llm(self)      
             self.app.settings['ai_first_startup'] = 'False'
             self.app.write_config_ini(self.app.settings, self.app.ai_models)
-        except Exception as e:
-            type_e = type(e)
-            value = e
-            tb_obj = e.__traceback__
+        except Exception as err:
+            type_e = type(err)
+            value = err
+            tb_obj = err.__traceback__
             # log the exception and show error msg
             qt_exception_hook.exception_hook(type_e, value, tb_obj)
     
@@ -2412,7 +2415,7 @@ Click "Yes" to start now.')
         cur.execute("CREATE TABLE ris (risid integer, tag text, longtag text, value text);")
         cur.execute("CREATE TABLE manage_files_display (mfid integer primary key, name text, tblrows text, tblcolumns text, owner text);")
         cur.execute("CREATE TABLE files_filter (filterid integer primary key, name text, filter text, owner text);")
-        self.app.update_coder_names() # will create table coder_names, add current coder, create views, etc.
+        self.app.update_coder_names()  # Create table coder_names, add current coder, create views, etc.
         cur.execute("INSERT INTO project VALUES(?,?,?,?,?,?,?,?)",
                     ('v14', datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"), '', qualcoder_version, 0,
                      0, self.app.settings['codername'], ""))
@@ -2983,7 +2986,7 @@ Click "Yes" to start now.')
         try:
             cur.execute("select name from coder_names")
         except sqlite3.OperationalError:
-            self.app.update_coder_names() # will create table coder_names, add current coder, create views, etc.
+            self.app.update_coder_names()  # Create table coder_names, add current coder, create views, etc.
             cur.execute('update project set databaseversion="v14", about=?', [qualcoder_version])
             self.app.conn.commit()
             self.ui.textEdit.append(_("Updating database to version") + " v14")
@@ -3315,11 +3318,13 @@ Click "Yes" to start now.')
             print(err)
             logger.warning(str(err))
 
+        tag = self.app.version.split("QualCoder ")[1]
+        citation = f"Citation:\nCurtain, C. Dröge, K. (2026) {self.app.version} [Computer software].\n"
+        citation += f"Retrieved from https://github.com/ccbogel/QualCoder/releases/tag/{tag}\n"
+        self.ui.textEdit.append(citation)
 
 def gui():
-    #print("Qt version: " + str(QtCore.qVersion()))
-    #if platform.system() == "Windows":
-    #    os.putenv('QT_QPA_PLATFORM', 'windows:darkmode=0')
+    # print("Qt version: " + str(QtCore.qVersion()))
     app = QtWidgets.QApplication(sys.argv)    
     qual_app = App()
     settings, ai_models = qual_app.load_settings()
@@ -3327,7 +3332,6 @@ def gui():
     # Check Noto Sans installed  - for general application
     install_noto_sans()
     QtGui.QFontDatabase.addApplicationFont(os.path.join(home, ".qualcoder", "NotoSans-Regular.ttf"))
-    # QtGui.QFontDatabase.addApplicationFont(os.path.join(home, ".qualcoder", "NotoSans-Bold.ttf"))
     stylesheet = qual_app.merge_settings_with_default_stylesheet(settings)
     app.setStyleSheet(stylesheet)
     if sys.platform != 'darwin':
@@ -3475,6 +3479,7 @@ def install_droid_sans_mono():
         decoded_data = base64.decodebytes(DroidSansMono)
         file_.write(decoded_data)
 
+
 def install_noto_sans():
     """ Install NotoSans ttf font for general application into .qualcoder folder """
 
@@ -3485,6 +3490,6 @@ def install_noto_sans():
 
 
 if __name__ == "__main__":
-     # Pyinstaller fix
+    # Pyinstaller fix
     multiprocessing.freeze_support()
     gui()
