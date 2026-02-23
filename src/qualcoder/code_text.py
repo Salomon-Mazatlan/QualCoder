@@ -63,9 +63,6 @@ ai_search_analysis_max_count = 10  # How many chunks of data are analysed in the
 path = os.path.abspath(os.path.dirname(__file__))
 logger = logging.getLogger(__name__)
 
-#TESTING = True
-TESTING = False
-
 
 class DialogCodeText(QtWidgets.QWidget):
     """ Code management. Add, delete codes. Mark and unmark text.
@@ -1714,8 +1711,6 @@ class DialogCodeText(QtWidgets.QWidget):
 
         text = self.ui.plainTextEdit.textCursor().selectedText()
         if metadata:
-            '''cur = self.app.conn.cursor()
-            cur.execute("select risid from source where source.id=?", [])'''
             start_pos = self.ui.plainTextEdit.textCursor().selectionStart() + self.file_['start']
             end_pos = self.ui.plainTextEdit.textCursor().selectionEnd() + self.file_['start']
             text += f"\nFile: {self.file_['name']} [{start_pos} - {end_pos}] "
@@ -1726,7 +1721,17 @@ class DialogCodeText(QtWidgets.QWidget):
                     codes += f"{coded['name']}; "
             if codes:
                 text += f"\nCodes: {codes}"
-
+            # Add reference, if any
+            cur = self.app.conn.cursor()
+            cur.execute("select risid from source where source.id=?", [self.file_['id']])
+            print(self.file_['id'])
+            ris_res = cur.fetchone()
+            print("ris_res", ris_res)
+            if ris_res[0]:
+                ris = Ris(self.app)
+                ris.get_references(ris_res[0])
+                if ris.refs:
+                    text += "\n" + _("Reference: ") + ris.refs[0]['apa']
         cb = QtWidgets.QApplication.clipboard()
         cb.setText(text)
 
@@ -3583,12 +3588,12 @@ class DialogCodeText(QtWidgets.QWidget):
         if self.text.endswith('\n'):
             self.text = self.text[
                         :-1]  # having '\n' at the end of the text sometimes creates an empty line in QTextEdit, so we omit it
-
-        if self.file_['name'][-3:].lower() == ".md":
+        # MarkDownHighlighter does not work now using QPlainTextEdit
+        '''if self.file_['name'][-3:].lower() == ".md":
             highlighter = MarkdownHighlighter(self.ui.plainTextEdit, self.app)
         else:
             highlighter = MarkdownHighlighter(self.ui.plainTextEdit, self.app)
-            highlighter.highlighting_rules = []
+            highlighter.highlighting_rules = []'''
 
         self.ui.plainTextEdit.setPlainText(self.text)
         self.get_coded_text_update_eventfilter_tooltips()
@@ -3928,14 +3933,14 @@ class DialogCodeText(QtWidgets.QWidget):
                     (note['pos0'] <= pos1 + self.file_['start'] <= note['pos1'])) \
                         and note['fid'] == self.file_['id']:
                     item = note  # use existing annotation
-                    details = item['owner'] + " " + item['date']
+                    details = f"{item['owner']} {item['date']}"
                     break
         if cursor_pos is not None:  # Try point position, if cursor is on an annotation, but no text selected
             for note in self.annotations:
                 if cursor_pos + self.file_['start'] >= note['pos0'] and cursor_pos <= note['pos1'] + self.file_['start'] \
                         and note['fid'] == self.file_['id']:
                     item = note  # use existing annotation
-                    details = item['owner'] + " " + item['date']
+                    details = f"{item['owner']} {item['date']}"
                     pos0 = cursor_pos
                     pos1 = cursor_pos
                     break
@@ -3996,16 +4001,6 @@ class DialogCodeText(QtWidgets.QWidget):
                                         + str(item['pos0']) + _(" for: ") + self.file_['name'])
         self.get_coded_text_update_eventfilter_tooltips()
 
-    '''def button_autocode_sentences_this_file(self):
-        """ Flag to autocode sentences in one file """
-
-        self.auto_code_sentences("")
-
-    def button_autocode_sentences_all_files(self):
-        """ Flag to autocode sentences across all text files. """
-
-        self.auto_code_sentences("all")'''
-
     def button_autocode_surround(self):
         """ Autocode with selected code using start and end marks.
          Uses selected files.
@@ -4019,7 +4014,7 @@ class DialogCodeText(QtWidgets.QWidget):
         if item is None or item.text(1)[0:3] == 'cat':
             Message(self.app, _('Warning'), _("No code was selected"), "warning").exec()
             return
-        ui = DialogGetStartAndEndMarks("Autocoding", "Autocoding surround")  # self.file_['name'], self.file_['name'])
+        ui = DialogGetStartAndEndMarks("Autocoding", "Autocoding surround")
         ok = ui.exec()
         if not ok:
             return
@@ -4103,7 +4098,7 @@ class DialogCodeText(QtWidgets.QWidget):
         self.fill_code_counts_in_tree()
         msg += str(entries) + _(" new coded sections found.") + "\n"
         if already_assigned > 0:
-            msg += str(already_assigned) + " " + _("previously coded.") + "\n"
+            msg += f"{already_assigned} " + _("previously coded.") + "\n"
         self.parent_textEdit.append(msg)
         Message(self.app, "Autocode surround", msg).exec()
         self.app.delete_backup = False
@@ -4132,7 +4127,7 @@ class DialogCodeText(QtWidgets.QWidget):
             self.app.conn.rollback()  # Revert all changes
             raise
         self.autocode_history.remove(undo)
-        self.parent_textEdit.append(_("Undo autocoding: " + undo['name'] + "\n"))
+        self.parent_textEdit.append(_("Undo autocoding: ") + f"{undo['name']}\n")
 
         # Update filter for tooltip and update code colours
         self.get_coded_text_update_eventfilter_tooltips()
@@ -4159,7 +4154,7 @@ class DialogCodeText(QtWidgets.QWidget):
         self.clear_edit_variables()
         cid = int(item.text(1).split(':')[1])
         dialog = QtWidgets.QInputDialog(None)
-        dialog.setStyleSheet("* {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
+        dialog.setStyleSheet(f"* {{font-size:{self.app.settings['fontsize']}pt}} ")
         dialog.setWindowTitle(_("Code sentence"))
         dialog.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
         dialog.setInputMode(QtWidgets.QInputDialog.InputMode.TextInput)
@@ -4172,7 +4167,7 @@ class DialogCodeText(QtWidgets.QWidget):
         if find_text == "":
             return
         dialog_sentence_end = QtWidgets.QInputDialog(None)
-        dialog_sentence_end.setStyleSheet("* {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
+        dialog_sentence_end.setStyleSheet(f"* {{font-size:{self.app.settings['fontsize']}pt}} ")
         dialog_sentence_end.setWindowTitle(_("Code sentence"))
         dialog_sentence_end.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
         dialog_sentence_end.setInputMode(QtWidgets.QInputDialog.InputMode.TextInput)
@@ -4363,8 +4358,7 @@ class DialogCodeText(QtWidgets.QWidget):
                     else:
                         text_starts = [match.start() for match in re.finditer(re.escape(find_txt), file_text)]
                         text_ends = [match.end() for match in re.finditer(re.escape(find_txt), file_text)]
-                    if TESTING:
-                        print("TEXT STARTS FOUND", len(text_starts), f['name'])
+                    # print("TEXT STARTS FOUND", len(text_starts), f['name'])
                     msg += f"{f['name']}: {len(text_starts)}. "
 
                     # Trim to first instance if option selected
