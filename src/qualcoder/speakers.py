@@ -99,6 +99,8 @@ class DialogSpeakers(QtWidgets.QDialog):
             re.compile(r"^\s*\[([^\]\r\n]{1," + str(max_name_len) + r"})\]\s*", flags=re.UNICODE),
             re.compile(r"^\s*\{([^}\r\n]{1," + str(max_name_len) + r"})\}\s*", flags=re.UNICODE),
         ]
+        # block http/https markers in the "name:" format to avoid false positives (e.g. "https://example.com" should not be treated as a speaker turn)
+        http_scheme_tail_re = re.compile(r"(?:^|\s)https?$", flags=re.IGNORECASE)
 
         # State for the currently open speaker turn
         current_name: Optional[str] = None
@@ -163,13 +165,25 @@ class DialogSpeakers(QtWidgets.QDialog):
 
             # Check whether this non-empty line starts a new speaker turn
             m = None
-            for regex in speaker_res:
+            matched_index = None
+            for index, regex in enumerate(speaker_res):
                 m = regex.match(line_wo_eol)
                 if m:
+                    matched_index = index
                     break
             if m:
                 code_as = m.group(1).strip()
-                if code_as:
+                is_colon_format = (matched_index == 0) # only the "name:" format is subject to blocking http(s)://
+                if (
+                    code_as
+                    and not (
+                        is_colon_format
+                        and (
+                            http_scheme_tail_re.search(code_as) is not None
+                            and line_wo_eol[m.end():].lstrip().startswith("//")
+                        )
+                    )
+                ):
                     # Close the previous turn (if any) before starting a new one
                     finalize_current_turn()
 
