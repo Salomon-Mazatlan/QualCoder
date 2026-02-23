@@ -21,11 +21,9 @@ https://qualcoder-org.github.io/
 """
 
 import datetime
-import re
-
-import fitz
 import ebooklib
 from ebooklib import epub
+import fitz
 import json
 import openpyxl
 import os.path
@@ -172,15 +170,13 @@ class DialogManageFiles(QtWidgets.QDialog):
 
     def pseudonyms(self):
         """ Pseudonymisation, data de-identification.
-        User created list of pseudonyms to replace senstitive wording, e.g. participant names.
-        The list must be crated before any text files or survey qualitative columns are imported.
-        The pseudonyms are case-sensistive.
+        User created list of pseudonyms to replace sensitive wording, e.g. participant names.
+        The list must be created before any text files or survey qualitative columns are imported.
+        The pseudonyms are case-sensitive.
         The original to pseudonym list is stored in the qda folder as pseudonyms.json
-        This file can be removed and stored securely afte rthe data is imported.
+        This file can be removed and stored securely after the data is imported.
         Pseudonyms does not apply to PDF imports. Instead import plain text of the PDF. """
 
-        # Message(self.app, "Pseudonymisation", "UNDER CONSTRUCTION\nDOES NOT WORK YET").exec()
-        # return  # TODO work in progress
         ui_pseudomyms = Pseudonyms(self.app)
         ui_pseudomyms.exec()
 
@@ -676,7 +672,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         file_typer, mediapath = extended_mediapath.split(':', 1)
         file_extension = Path(mediapath).suffix
         folder = self.app.settings['directory']
-        new_file_path, filter = QtWidgets.QFileDialog.getOpenFileName(self, _("Update file path"), folder,
+        new_file_path, filter_ = QtWidgets.QFileDialog.getOpenFileName(self, _("Update file path"), folder,
                                                               f"*{file_extension}")
         if new_file_path:
             new_file_path_extended = f"{file_typer}:{new_file_path}"
@@ -1900,7 +1896,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             with open(pseudonyms_filepath, "r") as f:
                 pseudonyms = json.load(f)
         except FileNotFoundError as err:
-            print(err)
+            pass
         return pseudonyms
 
     def load_file_text(self, import_file, link_path=""):
