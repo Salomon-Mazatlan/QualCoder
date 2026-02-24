@@ -137,6 +137,11 @@ class ViewGraph(QDialog):
             for cat in self.categories:
                 if code['name'] == cat['name']:
                     code['name'] = code['name'] + " "
+        # NUEVO: Variables para controlar el paneo (arrastre) del lienzo
+        self._space_pressed = False
+        self._is_panning = False
+        self._pan_start_x = 0
+        self._pan_start_y = 0
 
     def clear_items(self):
         """ Clear all items from scene.
@@ -395,10 +400,15 @@ class ViewGraph(QDialog):
             s['item'].show()
 
     def keyPressEvent(self, event):
-        """ Plus, W to zoom in and Minus, Q to zoom out. Needs focus on the QGraphicsView widget. """
-
+        """ Plus, W to zoom in and Minus, Q to zoom out. Space for panning. """
         key = event.key()
-        # mod = event.modifiers()
+        
+        # Paneo: Activar modo mano al presionar espacio
+        if key == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = True
+            self.ui.graphicsView.viewport().setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+            return
+
         if key == QtCore.Qt.Key.Key_Plus or key == QtCore.Qt.Key.Key_W:
             if self.ui.graphicsView.transform().isScaling() and self.ui.graphicsView.transform().determinant() > 10:
                 return
@@ -412,23 +422,67 @@ class ViewGraph(QDialog):
             for i in self.scene.items():
                 print(i.__class__, i.pos())
 
-    def reject(self):
+    def keyReleaseEvent(self, event):
+        """ Soltar espacio para desactivar el paneo. """
+        if event.key() == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = False
+            self.ui.graphicsView.viewport().setCursor(QtCore.Qt.CursorShape.ArrowCursor)
+        super().keyReleaseEvent(event)
 
+    def reject(self):
         super(ViewGraph, self).reject()
 
     def accept(self):
-
         super(ViewGraph, self).accept()
 
     def eventFilter(self, obj, event):
-        """ https://stackoverflow.com/questions/71993533/
-        how-to-initiate-context-menu-event-in-qgraphicsitem-from-qgraphicsview-context-m/72002453#72002453
-        This is required to forward context menu event to graphics view items.
-        I dont understand how it works yet! """
+        if obj == self.ui.graphicsView.viewport():
+            # ZOOM: Rueda del ratón
+            if event.type() == QtCore.QEvent.Type.Wheel:
+                self.ui.graphicsView.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
+                if event.angleDelta().y() > 0:
+                    if not (self.ui.graphicsView.transform().isScaling() and self.ui.graphicsView.transform().determinant() > 10):
+                        self.ui.graphicsView.scale(1.1, 1.1)
+                else:
+                    if not (self.ui.graphicsView.transform().isScaling() and self.ui.graphicsView.transform().determinant() < 0.1):
+                        self.ui.graphicsView.scale(0.9, 0.9)
+                return True
+                
+            # PANEO: Presionar botón central o (Espacio + Clic Izquierdo)
+            elif event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                if event.button() == QtCore.Qt.MouseButton.MiddleButton or (event.button() == QtCore.Qt.MouseButton.LeftButton and getattr(self, '_space_pressed', False)):
+                    self._is_panning = True
+                    self._pan_start_x = event.position().x()
+                    self._pan_start_y = event.position().y()
+                    self.ui.graphicsView.viewport().setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+                    return True
+                    
+            # PANEO: Arrastrar ratón
+            elif event.type() == QtCore.QEvent.Type.MouseMove and getattr(self, '_is_panning', False):
+                dx = event.position().x() - self._pan_start_x
+                dy = event.position().y() - self._pan_start_y
+                
+                # AJUSTE FINO INDEPENDIENTE: Suma (+) para X y Resta (-) para Y
+                self.ui.graphicsView.horizontalScrollBar().setValue(int(self.ui.graphicsView.horizontalScrollBar().value() + dx))
+                self.ui.graphicsView.verticalScrollBar().setValue(int(self.ui.graphicsView.verticalScrollBar().value() - dy))
+                
+                self._pan_start_x = event.position().x()
+                self._pan_start_y = event.position().y()
+                return True
+                
+            # PANEO: Soltar ratón
+            elif event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+                if getattr(self, '_is_panning', False) and (event.button() == QtCore.Qt.MouseButton.MiddleButton or event.button() == QtCore.Qt.MouseButton.LeftButton):
+                    self._is_panning = False
+                    cursor = QtCore.Qt.CursorShape.OpenHandCursor if getattr(self, '_space_pressed', False) else QtCore.Qt.CursorShape.ArrowCursor
+                    self.ui.graphicsView.viewport().setCursor(cursor)
+                    return True
 
-        if obj == self.ui.graphicsView.viewport() and event.type() == event.Type.ContextMenu:
-            self.ui.graphicsView.contextMenuEvent(event)
-            return event.isAccepted()
+            # MENÚ CONTEXTUAL
+            elif event.type() == event.Type.ContextMenu:
+                self.ui.graphicsView.contextMenuEvent(event)
+                return event.isAccepted()
+                
         return super().eventFilter(obj, event)
 
     def graphicsview_menu(self, position):
@@ -448,9 +502,88 @@ class ViewGraph(QDialog):
         action_add_cases = menu.addAction(_("Show cases"))
         action_memos = menu.addAction(_("Show memos of coded segments"))
         
-        # Propuesta: Se añade la opción "Ajustar gráfico a la pantalla" (Fit in View) para mejorar 
-        # la experiencia de navegación del usuario, escalando la vista automáticamente para ver todo el modelo.
-        action_fit_graph = menu.addAction("Ajustar gráfico a la pantalla")
+        # --- NUEVAS VISTAS ANALÍTICAS ---
+        menu.addSeparator()
+        action_fit_and_center = menu.addAction("Ajustar y Centrar Vista")
+        menu.addSeparator()
+        action_import_cooc = menu.addAction("Importar Código(s) y Co-ocurrencias")
+        
+        action_radial_layout = menu.addAction("Organizar vista (Radial)")
+        action_tree_layout = menu.addAction("Organizar vista (Árbol Arriba-Abajo)")
+        action_lr_layout = menu.addAction("Organizar vista (Izquierda a Derecha)")
+        action_rl_layout = menu.addAction("Organizar vista (Derecha a Izquierda)")
+        
+        menu.addSeparator()
+        action_refresh_lines = menu.addAction("Refrescar vista (Ocultar líneas sueltas)")
+        
+        action = menu.exec(self.ui.graphicsView.mapToGlobal(position))
+        
+        if action == action_add_text_item:
+            self.add_text_item_to_graph(position.x(), position.y())
+        if action == action_add_coded_text:
+            self.add_coded_text_of_text_files(position.x(), position.y())
+        if action == action_add_coded_image:
+            self.add_codes_of_image_files(position.x(), position.y())
+        if action == action_add_coded_av:
+            self.add_codes_of_av_files(position.x(), position.y())
+        if action == action_memos:
+            self.add_memos_of_coded(position.x(), position.y())
+        if action == action_add_line:
+            self.add_lines_to_graph()
+        if action == action_add_files:
+            self.add_files_to_graph()
+        if action == action_add_cases:
+            self.add_cases_to_graph()
+            
+        # --- EJECUCIÓN DE VISTAS ANALÍTICAS Y AJUSTES ---
+        if action == action_fit_and_center:
+            rect = self.scene.itemsBoundingRect()
+            rect.adjust(-100, -100, 100, 100)
+            self.scene.setSceneRect(rect)
+            self.ui.graphicsView.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            self.ui.graphicsView.centerOn(rect.center())
+            
+        if action == action_import_cooc:
+            self.import_codes_and_cooccurrences(position.x(), position.y())
+        if action == action_radial_layout:
+            self.organize_radially()
+        if action == action_tree_layout:
+            self.organize_hierarchically()
+        if action == action_lr_layout:
+            self.organize_horizontal("LR")
+        if action == action_rl_layout:
+            self.organize_horizontal("RL")
+        if action == action_refresh_lines:
+            self.refresh_lines_visibility()
+
+    def graphicsview_menu(self, position):
+        item = self.ui.graphicsView.itemAt(position)
+        if item is not None:
+            self.scene.sendEvent(item)
+            return
+        # Menu for blank graphics view area
+        menu = QtWidgets.QMenu()
+        menu.setStyleSheet("QMenu {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
+        action_add_text_item = menu.addAction(_("Insert Text"))
+        action_add_line = menu.addAction(_("Insert Line"))
+        action_add_coded_text = menu.addAction(_("Insert coded text items"))
+        action_add_coded_image = menu.addAction(_("Insert coded image items"))
+        action_add_coded_av = menu.addAction(_("Insert coded A/V items"))
+        action_add_files = menu.addAction(_("Show files"))
+        action_add_cases = menu.addAction(_("Show cases"))
+        action_memos = menu.addAction(_("Show memos of coded segments"))
+        
+        # --- NUEVAS VISTAS ANALÍTICAS ---
+        menu.addSeparator()
+        action_fit_and_center = menu.addAction("Ajustar y Centrar Vista")
+        menu.addSeparator()
+        action_import_cooc = menu.addAction("Importar Código(s) y Co-ocurrencias")
+        action_radial_layout = menu.addAction("Organizar vista (Radial)")
+        action_tree_layout = menu.addAction("Organizar vista (Árbol Arriba-Abajo)")
+        action_lr_layout = menu.addAction("Organizar vista (Izquierda a Derecha)")
+        action_rl_layout = menu.addAction("Organizar vista (Derecha a Izquierda)")
+        menu.addSeparator()
+        action_refresh_lines = menu.addAction("Refrescar vista (Ocultar líneas sueltas)")
         
         action = menu.exec(self.ui.graphicsView.mapToGlobal(position))
         if action == action_add_text_item:
@@ -470,13 +603,353 @@ class ViewGraph(QDialog):
         if action == action_add_cases:
             self.add_cases_to_graph()
             
-        # Propuesta: Lógica para ajustar automáticamente la vista al contenido (Fit to view).
-        # Encuentra el rectángulo que envuelve a todos los elementos, le añade un margen 
-        # y ajusta el zoom para que todo el modelo sea visible de un solo vistazo preservando el aspect ratio.
-        if action == action_fit_graph:
+        # --- EJECUCIÓN DE VISTAS ANALÍTICAS Y AJUSTES ---
+        if action == action_fit_and_center:
+            # 1. Obtiene el rectángulo que envuelve a TODOS los elementos reales
             rect = self.scene.itemsBoundingRect()
-            rect.adjust(-50, -50, 50, 50) # Añadir margen visual
+            # 2. Margen generoso (100px) para que los textos no queden pegados al borde de la pantalla
+            rect.adjust(-100, -100, 100, 100)
+            # 3. Forzar al lienzo a reconocer estos nuevos límites exactos
+            self.scene.setSceneRect(rect)
+            # 4. Ajustar el nivel de zoom para que quepa todo sin deformarse
             self.ui.graphicsView.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            # 5. Mover la cámara exactamente al centro geométrico del grafo
+            self.ui.graphicsView.centerOn(rect.center())
+            
+        if action == action_import_cooc:
+            self.import_codes_and_cooccurrences(position.x(), position.y())
+        if action == action_radial_layout:
+            self.organize_radially()
+        if action == action_tree_layout:
+            self.organize_hierarchically()
+        if action == action_lr_layout:
+            self.organize_horizontal("LR")
+        if action == action_rl_layout:
+            self.organize_horizontal("RL")
+        if action == action_refresh_lines:
+            self.refresh_lines_visibility()
+
+    # =======================================================================
+    # FUNCIONES DE ORGANIZACIÓN ESPACIAL Y ANÁLISIS ESTADÍSTICO
+    # =======================================================================
+
+    def import_codes_and_cooccurrences(self, x, y):
+        """ Importa un código, sus co-ocurrencias y genera reporte Lift/Jaccard """
+        if not self.codes:
+            Message(self.app, _("Sin códigos"), _("No hay códigos en este proyecto.")).exec()
+            return
+            
+        ui = DialogSelectItems(self.app, self.codes, "Seleccionar Código(s) a importar", "multi")
+        if not ui.exec():
+            return
+            
+        selected_codes = ui.get_selected()
+        
+        reply = QtWidgets.QMessageBox.question(self, "Reporte Estadístico Analítico", 
+                                               "¿Desea generar un reporte metodológico de co-ocurrencias (Índices Lift y Jaccard)?\n\n(Aparecerá en una ventana al terminar)",
+                                               QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                                               QtWidgets.QMessageBox.StandardButton.Yes)
+        generate_report = (reply == QtWidgets.QMessageBox.StandardButton.Yes)
+        
+        import math
+        cur = self.app.conn.cursor()
+
+        cur.execute("SELECT COUNT(ctid) FROM code_text")
+        res_n = cur.fetchone()
+        n_total = res_n[0] if res_n and res_n[0] > 0 else 1
+
+        full_report = "REPORTE ESTADÍSTICO DE CO-OCURRENCIAS\n" + ("=" * 80) + "\n"
+        full_report += "METODOLOGÍA Y FÓRMULAS:\n"
+        full_report += "1. Índice LIFT: (O_ab * N) / (O_a * O_b)\n"
+        full_report += "   > 1.0 : Atracción | = 1.0 : Independencia | < 1.0 : Repulsión\n"
+        full_report += "2. Coeficiente de JACCARD: O_ab / (O_a + O_b - O_ab)\n"
+        full_report += ("=" * 80) + "\n\n"
+        
+        has_cooc = False
+
+        for idx, sc in enumerate(selected_codes):
+            cx = x + (idx * 350)
+            cy = y
+            
+            main_node = next((item for item in self.scene.items() if isinstance(item, TextGraphicsItem) and item.code_or_cat.get('cid') == sc['cid']), None)
+            
+            if not main_node:
+                code_data = {'name': sc['name'], 'supercatid': sc.get('supercatid'), 'catid': sc.get('catid'), 'cid': sc['cid'], 
+                             'x': cx, 'y': cy, 'color': sc['color'], 'memo': sc.get('memo', ''), 'child_names': []}
+                main_node = TextGraphicsItem(self.app, code_data)
+                self.scene.addItem(main_node)
+            else:
+                cx, cy = main_node.pos().x(), main_node.pos().y()
+
+            cur.execute("SELECT COUNT(ctid) FROM code_text WHERE cid=?", [sc['cid']])
+            res_a = cur.fetchone()
+            count_a = res_a[0] if res_a and res_a[0] > 0 else 1
+
+            sql = """
+            SELECT c2.cid, n2.name, n2.color, COUNT(c2.cid) as overlap_count
+            FROM code_text c1
+            JOIN code_text c2 ON c1.fid = c2.fid AND c1.cid != c2.cid AND c1.pos0 < c2.pos1 AND c1.pos1 > c2.pos0
+            JOIN code_name n2 ON c2.cid = n2.cid
+            WHERE c1.cid = ?
+            GROUP BY c2.cid, n2.name, n2.color
+            """
+            cur.execute(sql, [sc['cid']])
+            res = cur.fetchall()
+
+            if res:
+                radius = max(120, len(res) * 20) 
+                angle_step = (2 * math.pi) / max(1, len(res))
+                
+                if generate_report:
+                    full_report += f"ANÁLISIS DEL CÓDIGO PRINCIPAL: [{sc['name']}] (Frecuencia O_a: {count_a})\n" 
+                    full_report += ("-" * 80) + "\n"
+                    has_cooc = True
+
+                for i, r in enumerate(res):
+                    cooc_cid, cooc_name, cooc_color, overlap_count = r
+                    
+                    if generate_report:
+                        cur.execute("SELECT COUNT(ctid) FROM code_text WHERE cid=?", [cooc_cid])
+                        res_b = cur.fetchone()
+                        count_b = res_b[0] if res_b and res_b[0] > 0 else 1
+                        
+                        lift = (overlap_count * n_total) / (count_a * count_b)
+                        denominator = (count_a + count_b - overlap_count)
+                        jaccard = (overlap_count / denominator) if denominator > 0 else 0.0
+                        
+                        full_report += f"  • {cooc_name}\n"
+                        full_report += f"      O_ab: {overlap_count} | O_b: {count_b} | LIFT: {lift:.2f} | JACCARD: {jaccard:.3f}\n\n"
+                    
+                    target_node = next((item for item in self.scene.items() if isinstance(item, TextGraphicsItem) and item.code_or_cat.get('cid') == cooc_cid), None)
+                    if not target_node:
+                        nx = cx + radius * math.cos(i * angle_step)
+                        ny = cy + radius * math.sin(i * angle_step)
+                        cooc_data = {'name': cooc_name, 'supercatid': None, 'catid': None, 'cid': cooc_cid, 
+                                     'x': nx, 'y': ny, 'color': cooc_color, 'memo': "", 'child_names': []}
+                        target_node = TextGraphicsItem(self.app, cooc_data)
+                        self.scene.addItem(target_node)
+
+                    line_exists = any(isinstance(link, LinkGraphicsItem) and 
+                                      ((link.from_widget == main_node and link.to_widget == target_node) or 
+                                       (link.from_widget == target_node and link.to_widget == main_node)) 
+                                      for link in self.scene.items())
+                    if not line_exists:
+                        line_item = LinkGraphicsItem(main_node, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True)
+                        self.scene.addItem(line_item)
+                        
+        if generate_report and has_cooc:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("Reporte Estadístico Metodológico")
+            dialog.resize(700, 600)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            
+            text_edit = QtWidgets.QTextEdit(dialog)
+            text_edit.setPlainText(full_report)
+            text_edit.setReadOnly(True)
+            font = QtGui.QFont("Courier")
+            font.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
+            text_edit.setFont(font)
+            
+            btn_save = QtWidgets.QPushButton("Guardar Reporte como .txt", dialog)
+            def save_to_txt():
+                filepath, _ = QtWidgets.QFileDialog.getSaveFileName(dialog, "Guardar Reporte", "", "Archivos de texto (*.txt)")
+                if filepath:
+                    if not filepath.endswith(".txt"): filepath += ".txt"
+                    try:
+                        with open(filepath, 'w', encoding='utf-8') as f:
+                            f.write(text_edit.toPlainText())
+                        QtWidgets.QMessageBox.information(dialog, "Éxito", "Reporte guardado correctamente.")
+                    except Exception as e:
+                        QtWidgets.QMessageBox.warning(dialog, "Error", f"Error al guardar:\n{e}")
+            btn_save.clicked.connect(save_to_txt)
+            layout.addWidget(text_edit)
+            layout.addWidget(btn_save)
+            dialog.exec()
+
+    def refresh_lines_visibility(self):
+        """ Oculta líneas conectadas a nodos invisibles """
+        for item in self.scene.items():
+            if isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
+                if hasattr(item, 'from_widget') and hasattr(item, 'to_widget'):
+                    if not item.from_widget.isVisible() or not item.to_widget.isVisible():
+                        item.hide()
+                    else:
+                        item.show()
+        self.scene.update()
+
+    def _get_tree_structure(self):
+        """ Extrae jerarquías basadas en las líneas dibujadas """
+        nodes, links = [], []
+        for item in self.scene.items():
+            if not item.isVisible(): continue
+            if isinstance(item, TextGraphicsItem) or isinstance(item, FreeTextGraphicsItem) or \
+               isinstance(item, CaseTextGraphicsItem) or isinstance(item, FileTextGraphicsItem):
+                nodes.append(item)
+            elif isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
+                links.append(item)
+                
+        children = {n: [] for n in nodes}
+        has_parent = {n: False for n in nodes}
+        for link in links:
+            if hasattr(link, 'from_widget') and hasattr(link, 'to_widget'):
+                p, c = link.from_widget, link.to_widget
+                if p in children and c in children and c not in children[p]:
+                    children[p].append(c)
+                    has_parent[c] = True
+                    
+        roots = [n for n in nodes if not has_parent[n]]
+        if not roots: roots = nodes 
+        return nodes, links, children, roots
+
+    def organize_hierarchically(self):
+        """ Dibuja árbol Arriba-Abajo evitando empalmes """
+        nodes, links, children, roots = self._get_tree_structure()
+        if not nodes: return
+        rect = self.scene.itemsBoundingRect()
+        start_x = rect.center().x() - (len(nodes) * 20)
+        start_y = rect.top() + 50
+        y_spacing = 90
+        visited = set()
+        
+        def set_pos(n, x, y):
+            if hasattr(n, 'code_or_cat') and n.code_or_cat is not None:
+                n.code_or_cat['x'], n.code_or_cat['y'] = x, y
+            n.setPos(x, y)
+            
+        current_x = start_x
+        def layout_node(node, depth):
+            nonlocal current_x
+            if node in visited: return node.pos().x()
+            visited.add(node)
+            node_w = node.boundingRect().width() if hasattr(node, 'boundingRect') else 100
+            
+            ch = children.get(node, [])
+            if not ch:
+                x = current_x
+                set_pos(node, x, start_y + (depth * y_spacing))
+                current_x += node_w + 30
+                return x
+                
+            c_xs = [layout_node(c, depth + 1) for c in ch]
+            parent_x = sum(c_xs) / len(c_xs) if c_xs else current_x
+            if parent_x < current_x: parent_x = current_x
+            set_pos(node, parent_x, start_y + (depth * y_spacing))
+            
+            expected_right = parent_x + node_w + 30
+            if current_x < expected_right: current_x = expected_right
+            return parent_x
+            
+        for r in roots: layout_node(r, 0)
+        for n in nodes:
+            if n not in visited: layout_node(n, 0)
+                
+        for link in links: link.redraw()
+        self.scene.suggested_scene_size()
+        self.scene.update()
+
+    def organize_horizontal(self, direction="LR"):
+        """ Dibuja árbol Izquierda-Derecha (LR) o Derecha-Izquierda (RL) """
+        nodes, links, children, roots = self._get_tree_structure()
+        if not nodes: return
+        rect = self.scene.itemsBoundingRect()
+        start_y = rect.center().y() - (len(nodes) * 20)
+        
+        start_x = rect.left() + 50 if direction == "LR" else rect.right() - 50
+        x_multiplier = 1 if direction == "LR" else -1
+        visited = set()
+        
+        def set_pos(n, x, y):
+            if hasattr(n, 'code_or_cat') and n.code_or_cat is not None:
+                n.code_or_cat['x'], n.code_or_cat['y'] = x, y
+            n.setPos(x, y)
+            
+        current_y = start_y
+        def layout_node(node, depth):
+            nonlocal current_y
+            if node in visited: return node.pos().y()
+            visited.add(node)
+            
+            node_h = node.boundingRect().height() if hasattr(node, 'boundingRect') else 40
+            node_x = start_x + (depth * 250 * x_multiplier)
+            
+            ch = children.get(node, [])
+            if not ch:
+                y = current_y
+                set_pos(node, node_x, y)
+                current_y += node_h + 20
+                return y
+                
+            c_ys = [layout_node(c, depth + 1) for c in ch]
+            parent_y = sum(c_ys) / len(c_ys) if c_ys else current_y
+            set_pos(node, node_x, parent_y)
+            
+            expected_bottom = parent_y + node_h + 20
+            if current_y < expected_bottom: current_y = expected_bottom
+            return parent_y
+            
+        for r in roots: layout_node(r, 0)
+        for n in nodes:
+            if n not in visited: layout_node(n, 0)
+                
+        for link in links: link.redraw()
+        self.scene.suggested_scene_size()
+        self.scene.update()
+
+    def organize_radially(self):
+        """ Dibuja modelo Radial calculando radios exactos por tamaño de texto """
+        import math
+        categories, codes, segments = [], [], []
+        for item in self.scene.items():
+            if not item.isVisible(): continue
+            if isinstance(item, TextGraphicsItem):
+                if item.code_or_cat.get('cid') is None: categories.append(item)
+                else: codes.append(item)
+            elif isinstance(item, FreeTextGraphicsItem) or isinstance(item, CaseTextGraphicsItem) or \
+                 isinstance(item, FileTextGraphicsItem):
+                segments.append(item)
+                
+        if not (categories or codes or segments): return
+        codes.sort(key=lambda x: str(x.code_or_cat.get('catid', '')))
+
+        rect = self.scene.itemsBoundingRect()
+        center_x, center_y = rect.center().x(), rect.center().y()
+        
+        def place_in_circle(nodes_list, radius, cx, cy):
+            if not nodes_list: return
+            if len(nodes_list) == 1 and radius <= 10:
+                nodes_list[0].setPos(cx, cy)
+                if hasattr(nodes_list[0], 'code_or_cat') and nodes_list[0].code_or_cat is not None:
+                    nodes_list[0].code_or_cat['x'], nodes_list[0].code_or_cat['y'] = cx, cy
+                return
+                
+            angle_step = (2 * math.pi) / len(nodes_list)
+            for i, node in enumerate(nodes_list):
+                angle = i * angle_step
+                new_x = cx + radius * math.cos(angle)
+                new_y = cy + radius * math.sin(angle)
+                n_w = node.boundingRect().width() / 2 if hasattr(node, 'boundingRect') else 0
+                n_h = node.boundingRect().height() / 2 if hasattr(node, 'boundingRect') else 0
+                if hasattr(node, 'code_or_cat') and node.code_or_cat is not None:
+                    node.code_or_cat['x'], node.code_or_cat['y'] = new_x - n_w, new_y - n_h
+                node.setPos(new_x - n_w, new_y - n_h)
+
+        def get_dynamic_radius(nodes_list, min_radius):
+            if not nodes_list: return min_radius
+            total_width_needed = sum([(n.boundingRect().width() if hasattr(n, 'boundingRect') else 100) + 30 for n in nodes_list])
+            return max(min_radius, total_width_needed / (2 * math.pi))
+
+        rad_cat = 0 if len(categories) <= 1 else get_dynamic_radius(categories, 80)
+        rad_codes = rad_cat + get_dynamic_radius(codes, 120) if codes else rad_cat
+        rad_segments = rad_codes + get_dynamic_radius(segments, 150) if segments else rad_codes
+        
+        place_in_circle(categories, rad_cat, center_x, center_y)
+        place_in_circle(codes, rad_codes, center_x, center_y)
+        place_in_circle(segments, rad_segments, center_x, center_y)
+            
+        for item in self.scene.items():
+            if isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem): item.redraw()
+        self.scene.suggested_scene_size()
+        self.scene.update()
 
     def add_codes_of_av_files(self, x=10, y=10):
         """ Show selected codes of selected audio/video files as av graphics items.
@@ -1008,24 +1481,28 @@ class ViewGraph(QDialog):
         return res
 
     def export_image(self):
-        """ Export the QGraphicsScene as a png image with transparent background.
-        Called by QButton_export.
-        """
-
+        """ Export the QGraphicsScene as a png image with transparent background. """
         filename = "Graph.png"
         e_dir = ExportDirectoryPathDialog(self.app, filename)
         filepath = e_dir.filepath
         if filepath is None:
             return
-        # Scene size is too big.
-        max_x, max_y = self.scene.suggested_scene_size()
-        rect_area = QtCore.QRectF(0.0, 0.0, max_x + 10, max_y + 10)  # Source area
-        image = QtGui.QImage(int(max_x + 10), int(max_y + 10), QtGui.QImage.Format.Format_ARGB32_Premultiplied)
+
+        # REPARACIÓN: Obtener el rectángulo real que envuelve a TODOS los elementos (incluso coordenadas negativas)
+        rect = self.scene.itemsBoundingRect()
+        rect.adjust(-30, -30, 30, 30) # Añadir un margen seguro de 30px alrededor de la imagen
+
+        # Crear la imagen con el tamaño exacto del rectángulo detectado
+        image = QtGui.QImage(int(rect.width()), int(rect.height()), QtGui.QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QtCore.Qt.GlobalColor.transparent) # Asegurar fondo transparente
+
         painter = QtGui.QPainter(image)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        # Render method requires QRectF NOT QRect. painter, target area, source area
-        self.scene.render(painter, QtCore.QRectF(image.rect()), rect_area)
+        
+        # Renderizar especificando el área objetivo (la imagen) y el área de origen (el rectángulo exacto de la escena)
+        self.scene.render(painter, QtCore.QRectF(image.rect()), rect)
         painter.end()
+        
         image.save(filepath)
         Message(self.app, _("Image exported"), filepath).exec()
 
@@ -1823,42 +2300,27 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
         return self.scene_height
 
     def mouseMoveEvent(self, mouse_event):
-        """ On mouse move, an item might be repositioned so need to redraw all the link_items.
-        This slows re-drawing down, but is dynamic. """
+        """ Actualiza las posiciones al mover un nodo (movimiento fluido individual). """
+        # Corrección: En QualCoder original se llamaba a mousePressEvent por error aquí.
+        super(GraphicsScene, self).mouseMoveEvent(mouse_event)
 
-        super(GraphicsScene, self).mousePressEvent(mouse_event)
-
-        x_diff = 0
-        y_diff = 0
-        child_names = []
         for item in self.items():
             if isinstance(item, TextGraphicsItem):
                 if item.code_or_cat['x'] != item.pos().x() or item.code_or_cat['y'] != item.pos().y():
-                    x_diff = item.pos().x() - item.code_or_cat['x']
                     item.code_or_cat['x'] = item.pos().x()
-                    y_diff = item.pos().y() - item.code_or_cat['y']
                     item.code_or_cat['y'] = item.pos().y()
                     item.setPos(item.code_or_cat['x'], item.code_or_cat['y'])
-                    child_names = item.code_or_cat['child_names']
-                    break
-        # Move child items of category
-        if x_diff != 0 or y_diff != 0:
-            for item in self.items():
-                if isinstance(item, TextGraphicsItem) and item.code_or_cat['name'] in child_names:
-                    item.code_or_cat['x'] += x_diff
-                    item.code_or_cat['y'] += y_diff
-                    item.setPos(item.code_or_cat['x'], item.code_or_cat['y'])
+                    
         for item in self.items():
             if isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
                 item.redraw()
+                
         for item in self.items():
-            if isinstance(item, FreeLineGraphicsItem) or isinstance(item, FreeTextGraphicsItem) \
-                    or isinstance(item, FileTextGraphicsItem) or isinstance(item, CaseTextGraphicsItem) \
-                    or isinstance(item, PixmapGraphicsItem):
-                if item.remove is True:
-                    self.removeItem(item)
-        self.adjust_for_negative_positions()
-        self.suggested_scene_size()
+            if hasattr(item, 'remove') and item.remove is True:
+                self.removeItem(item)
+                
+        # Removidas las funciones de recalcular márgenes en cada milisegundo 
+        # para evitar el movimiento estrepitoso en las orillas.
         self.update()
 
     '''def mousePressEvent(self, mouseEvent):
@@ -1896,20 +2358,13 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
                     i.setPos(i.pos().x() - min_adjust_x, i.pos().y() - min_adjust_y)
 
     def suggested_scene_size(self):
-        """ Calculate the maximum width and height from the current Items. """
-
-        max_x = 0
-        max_y = 0
-        for i in self.items():
-            if isinstance(i, TextGraphicsItem) or isinstance(i, FreeTextGraphicsItem) or \
-                    isinstance(i, FileTextGraphicsItem) or isinstance(i, CaseTextGraphicsItem) or \
-                    isinstance(i, PixmapGraphicsItem):
-                if i.pos().x() + i.boundingRect().width() > max_x:
-                    max_x = i.pos().x() + i.boundingRect().width()
-                if i.pos().y() + i.boundingRect().height() > max_y:
-                    max_y = i.pos().y() + i.boundingRect().height()
-        self.setSceneRect(0, 0, max_x, max_y)
-        return max_x, max_y
+        """ Calcula el tamaño real de la escena permitiendo márgenes para el paneo libre. """
+        rect = self.itemsBoundingRect()
+        rect.adjust(-600, -600, 600, 600)  # Añade espacio libre en todas direcciones
+        self.setSceneRect(rect)
+        self.scene_width = rect.width()
+        self.scene_height = rect.height()
+        return self.scene_width, self.scene_height
 
 
 class CaseTextGraphicsItem(QtWidgets.QGraphicsTextItem):
@@ -2642,102 +3097,69 @@ class FreeLineGraphicsItem(QtWidgets.QGraphicsPolygonItem):
         self.calculate_points_and_draw()
 
     def calculate_points_and_draw(self):
-        """ Calculate the to x and y and from x and y points. Draw line between the
-        widgets. Join the line to appropriate side of widget.
-         Arrowhead direction changes every 30 degrees based on theta arctangent:
-        > -150:-180 and 150:180, ˩ -150:-120, v -120:-60, L -30:-60, < -30:30, ⌈ 30:60, ^ 60:120, ˥ 120:150
-         """
+        """ Cálculo fluido con punta de flecha giratoria. """
+        import math
+        
+        c1 = self.from_widget.sceneBoundingRect().center()
+        c2 = self.to_widget.sceneBoundingRect().center()
+        self.setZValue(-1)
 
-        to_x = self.to_widget.pos().x()
-        to_y = self.to_widget.pos().y()
-        from_x = self.from_widget.pos().x()
-        from_y = self.from_widget.pos().y()
+        is_ellipse_from = getattr(self.from_widget, 'is_ellipse', False)
+        is_ellipse_to = getattr(self.to_widget, 'is_ellipse', False)
+        
+        rect1 = self.from_widget.sceneBoundingRect()
+        rect2 = self.to_widget.sceneBoundingRect()
+        
+        def get_edge_point(center_source, center_target, rect, is_ellipse):
+            dx = center_target.x() - center_source.x()
+            dy = center_target.y() - center_source.y()
+            if dx == 0 and dy == 0: return center_source
+            
+            w = rect.width() / 2
+            h = rect.height() / 2
+            
+            if is_ellipse:
+                angle = math.atan2(dy, dx)
+                return QtCore.QPointF(center_source.x() + w * math.cos(angle), center_source.y() + h * math.sin(angle))
+            else:
+                if dx == 0: return QtCore.QPointF(center_source.x(), center_source.y() + math.copysign(h, dy))
+                if dy == 0: return QtCore.QPointF(center_source.x() + math.copysign(w, dx), center_source.y())
+                
+                tx = w / abs(dx)
+                ty = h / abs(dy)
+                t = min(tx, ty)
+                return QtCore.QPointF(center_source.x() + dx * t, center_source.y() + dy * t)
 
-        x_overlap = False
-        # fix from_x value to middle of from widget if to_widget overlaps in x position
-        if from_x < to_x < from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width() / 2
-            x_overlap = True
-        # fix to_x value to middle of to widget if from_widget overlaps in x position
-        if to_x < from_x < to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width() / 2
-            x_overlap = True
+        if rect1.intersects(rect2):
+            p1, p2 = c1, c2
+        else:
+            p1 = get_edge_point(c1, c2, rect1, is_ellipse_from)
+            p2 = get_edge_point(c2, c1, rect2, is_ellipse_to)
 
-        # Fix from_x value to right-hand side of from widget if to_widget on the right of the from_widget
-        if not x_overlap and to_x > from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width()
-        # Fix to_x value to right-hand side if from_widget on the right of the to widget
-        elif not x_overlap and from_x > to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width()
-
-        y_overlap = False
-        # Fix from_y value to middle of from widget if to_widget overlaps in y position
-        if from_y < to_y < from_y + self.from_widget.boundingRect().height():
-            from_y = from_y + self.from_widget.boundingRect().height() / 2
-            y_overlap = True
-        # Fix from_y value to middle of to widget if from_widget overlaps in y position
-        if to_y < from_y < to_y + self.to_widget.boundingRect().height():
-            to_y = to_y + self.to_widget.boundingRect().height() / 2
-            y_overlap = True
-
-        # Fix from_y value if to_widget is above the from_widget
-        if not y_overlap and to_y > from_y:
-            from_y = from_y + self.from_widget.boundingRect().height()
-        # Fix to_y value if from_widget is below the to widget
-        elif not y_overlap and from_y > to_y:
-            to_y = to_y + self.to_widget.boundingRect().height()
         color_obj = colors[self.color]
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))
 
-        dx = from_x - to_x
-        dy = from_y - to_y
-        theta = atan2(dy, dx)
-        theta *= 180 / pi  # radians to degrees
+        # --- DIBUJO DE FLECHA TRIGONOMETRICA FLUIDA ---
+        dx = p1.x() - p2.x()
+        dy = p1.y() - p2.y()
+        theta = math.atan2(dy, dx)
+        
         polygon = QtGui.QPolygonF()
-        polygon.append(QtCore.QPointF(from_x, from_y))
-        polygon.append(QtCore.QPointF(to_x, to_y))
-        if -180 <= theta < -150:
-            polygon.append(QtCore.QPointF(to_x - 5, to_y - 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x - 5, to_y + 5))
-        if -150 <= theta <= -120:
-            polygon.append(QtCore.QPointF(to_x - 6, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y - 6))
-        if -120 < theta < -60:
-            polygon.append(QtCore.QPointF(to_x - 5, to_y - 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x + 5, to_y - 5))
-        if -60 <= theta < -30:
-            polygon.append(QtCore.QPointF(to_x + 6, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y - 6))
-        if -30 <= theta < 0:
-            polygon.append(QtCore.QPointF(to_x + 5, to_y - 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x + 5, to_y + 5))
-        if 0 <= theta < 30:
-            polygon.append(QtCore.QPointF(to_x + 5, to_y - 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x + 5, to_y + 5))
-        if 30 <= theta < 60:
-            polygon.append(QtCore.QPointF(to_x + 6, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y + 6))
-        if 60 <= theta < 120:
-            polygon.append(QtCore.QPointF(to_x - 5, to_y + 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x + 5, to_y + 5))
-        if 120 <= theta < 150:
-            polygon.append(QtCore.QPointF(to_x - 6, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x, to_y + 6))
-        if 150 <= theta <= 180:
-            polygon.append(QtCore.QPointF(to_x - 5, to_y - 5))
-            polygon.append(QtCore.QPointF(to_x, to_y))
-            polygon.append(QtCore.QPointF(to_x - 5, to_y + 5))
-        polygon.append(QtCore.QPointF(to_x, to_y))
-        # self.setToolTip(f"THETA {round(theta, 1)} Pts:{len(polygon)}")
+        polygon.append(p1)
+        polygon.append(p2)
+        
+        # Puntas de flecha a 30 grados (pi/6) del eje de la línea
+        arrow_size = 12
+        p3 = QtCore.QPointF(p2.x() + arrow_size * math.cos(theta + math.pi / 6),
+                            p2.y() + arrow_size * math.sin(theta + math.pi / 6))
+        p4 = QtCore.QPointF(p2.x() + arrow_size * math.cos(theta - math.pi / 6),
+                            p2.y() + arrow_size * math.sin(theta - math.pi / 6))
+        
+        polygon.append(p3)
+        polygon.append(p2)
+        polygon.append(p4)
+        polygon.append(p2)
+        
         self.setPolygon(polygon)
 
 
@@ -2845,50 +3267,60 @@ class XFreeLineGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.calculate_points_and_draw()
 
     def calculate_points_and_draw(self):
-        """ Calculate the to x and y and from x and y points. Draw line between the
-        widgets. Join the line to appropriate side of widget. """
+        """ Calcula los puntos de inicio y fin desde el borde exacto (rectángulo o elipse). """
+        import math
+        
+        # 1. Obtener centros y tamaños reales
+        from_w = self.from_widget.boundingRect().width()
+        from_h = self.from_widget.boundingRect().height()
+        to_w = self.to_widget.boundingRect().width()
+        to_h = self.to_widget.boundingRect().height()
+        
+        from_cx = self.from_widget.pos().x() + from_w / 2
+        from_cy = self.from_widget.pos().y() + from_h / 2
+        to_cx = self.to_widget.pos().x() + to_w / 2
+        to_cy = self.to_widget.pos().y() + to_h / 2
 
-        to_x = self.to_widget.pos().x()
-        to_y = self.to_widget.pos().y()
-        from_x = self.from_widget.pos().x()
-        from_y = self.from_widget.pos().y()
+        # 2. Detectar forma del nodo
+        is_ellipse_from = getattr(self.from_widget, 'is_ellipse', False)
+        is_ellipse_to = getattr(self.to_widget, 'is_ellipse', False)
 
-        x_overlap = False
-        # fix from_x value to middle of from widget if to_widget overlaps in x position
-        if from_x < to_x < from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width() / 2
-            x_overlap = True
-        # fix to_x value to middle of to widget if from_widget overlaps in x position
-        if to_x < from_x < to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width() / 2
-            x_overlap = True
+        # 3. Función matemática para hallar la intersección del perímetro
+        def get_perimeter_point(cx, cy, w, h, target_x, target_y, is_ellipse):
+            dx = target_x - cx
+            dy = target_y - cy
+            if dx == 0 and dy == 0: 
+                return cx, cy
+            
+            if is_ellipse:
+                angle = math.atan2(dy, dx)
+                return cx + (w / 2) * math.cos(angle), cy + (h / 2) * math.sin(angle)
+            else:
+                half_w, half_h = w / 2, h / 2
+                if dx == 0: return cx, cy + math.copysign(half_h, dy)
+                if dy == 0: return cx + math.copysign(half_w, dx), cy
+                tx = half_w / abs(dx)
+                ty = half_h / abs(dy)
+                t = min(tx, ty)
+                return cx + dx * t, cy + dy * t
 
-        # Fix from_x value to right-hand side of from widget if to_widget on the right of the from_widget
-        if not x_overlap and to_x > from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width()
-        # Fix to_x value to right-hand side if from_widget on the right of the to widget
-        elif not x_overlap and from_x > to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width()
+        from_px, from_py = get_perimeter_point(from_cx, from_cy, from_w, from_h, to_cx, to_cy, is_ellipse_from)
+        to_px, to_py = get_perimeter_point(to_cx, to_cy, to_w, to_h, from_cx, from_cy, is_ellipse_to)
 
-        y_overlap = False
-        # Fix from_y value to middle of from widget if to_widget overlaps in y position
-        if from_y < to_y < from_y + self.from_widget.boundingRect().height():
-            from_y = from_y + self.from_widget.boundingRect().height() / 2
-            y_overlap = True
-        # Fix from_y value to middle of to widget if from_widget overlaps in y position
-        if to_y < from_y < to_y + self.to_widget.boundingRect().height():
-            to_y = to_y + self.to_widget.boundingRect().height() / 2
-            y_overlap = True
-
-        # Fix from_y value if to_widget is above the from_widget
-        if not y_overlap and to_y > from_y:
-            from_y = from_y + self.from_widget.boundingRect().height()
-        # Fix to_y value if from_widget is below the to widget
-        elif not y_overlap and from_y > to_y:
-            to_y = to_y + self.to_widget.boundingRect().height()
+        # 4. Dibujar
         color_obj = colors[self.color]
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))
-        self.setLine(from_x, from_y, to_x, to_y)
+        self.setLine(from_px, from_py, to_px, to_py)
+        
+        # 5. Enviar línea al fondo (Z = -1) para que no tape los textos
+        self.setZValue(-1)
+
+        # 6. Centrar la etiqueta en la línea si existe
+        if hasattr(self, 'text_item') and self.text_item:
+            mid_x = (from_px + to_px) / 2
+            mid_y = (from_py + to_py) / 2
+            br = self.text_item.boundingRect()
+            self.text_item.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
         
         # Propuesta: Recálculo dinámico de las coordenadas de la etiqueta.
         # Garantiza que el texto se posicione en el punto medio exacto de la arista en cada evento de repintado.
@@ -3408,8 +3840,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
                 target_node = TextGraphicsItem(self.app, code_data)
                 self.scene().addItem(target_node)
                 
-            # Línea de color azul, estilo punteado y texto requerido "co-ocurrencia: X"
-            line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True, label=f"co-ocurrencia: {s['count']}")
+            # Línea de color azul y estilo punteado (Sin texto de frecuencia)
+            line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True)
             self.scene().addItem(line_item)
 
     def add_edit_memo(self):
@@ -3555,46 +3987,54 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.calculate_points_and_draw()
 
     def calculate_points_and_draw(self):
-        """ Calculate the to x and y and from x and y points. Draw line between the
-        widgets. Join the line to appropriate side of widget. """
+        """ Cálculo fluido de intersección perimetral. """
+        import math
+        
+        c1 = self.from_widget.sceneBoundingRect().center()
+        c2 = self.to_widget.sceneBoundingRect().center()
+        
+        # Enviar la línea detrás de los nodos visualmente
+        self.setZValue(-1)
 
-        to_x = self.to_widget.pos().x()
-        to_y = self.to_widget.pos().y()
-        from_x = self.from_widget.pos().x()
-        from_y = self.from_widget.pos().y()
+        is_ellipse_from = getattr(self.from_widget, 'is_ellipse', False)
+        is_ellipse_to = getattr(self.to_widget, 'is_ellipse', False)
+        
+        rect1 = self.from_widget.sceneBoundingRect()
+        rect2 = self.to_widget.sceneBoundingRect()
+        
+        def get_edge_point(center_source, center_target, rect, is_ellipse):
+            dx = center_target.x() - center_source.x()
+            dy = center_target.y() - center_source.y()
+            if dx == 0 and dy == 0: return center_source
+            
+            w = rect.width() / 2
+            h = rect.height() / 2
+            
+            if is_ellipse:
+                angle = math.atan2(dy, dx)
+                return QtCore.QPointF(center_source.x() + w * math.cos(angle), center_source.y() + h * math.sin(angle))
+            else:
+                if dx == 0: return QtCore.QPointF(center_source.x(), center_source.y() + math.copysign(h, dy))
+                if dy == 0: return QtCore.QPointF(center_source.x() + math.copysign(w, dx), center_source.y())
+                
+                tx = w / abs(dx)
+                ty = h / abs(dy)
+                t = min(tx, ty)
+                return QtCore.QPointF(center_source.x() + dx * t, center_source.y() + dy * t)
 
-        x_overlap = False
-        # Fix from_x value to middle of from widget if to_widget overlaps in x position
-        if from_x < to_x < from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width() / 2
-            x_overlap = True
-        # Fix to_x value to middle of to widget if from_widget overlaps in x position
-        if to_x < from_x < to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width() / 2
-            x_overlap = True
+        if rect1.intersects(rect2):
+            p1 = c1
+            p2 = c2
+        else:
+            p1 = get_edge_point(c1, c2, rect1, is_ellipse_from)
+            p2 = get_edge_point(c2, c1, rect2, is_ellipse_to)
 
-        # Fix from_x value to right-hand side of from widget if to_widget on the right of the from_widget
-        if not x_overlap and to_x > from_x + self.from_widget.boundingRect().width():
-            from_x = from_x + self.from_widget.boundingRect().width()
-        # Fix to_x value to right-hand side if from_widget on the right of the to widget
-        elif not x_overlap and from_x > to_x + self.to_widget.boundingRect().width():
-            to_x = to_x + self.to_widget.boundingRect().width()
-
-        y_overlap = False
-        # Fix from_y value to middle of from widget if to_widget overlaps in y position
-        if from_y < to_y < from_y + self.from_widget.boundingRect().height():
-            from_y = from_y + self.from_widget.boundingRect().height() / 2
-            y_overlap = True
-        # Fix from_y value to middle of to widget if from_widget overlaps in y position
-        if to_y < from_y < to_y + self.to_widget.boundingRect().height():
-            to_y = to_y + self.to_widget.boundingRect().height() / 2
-            y_overlap = True
-        # Fix from_y value if to_widget is above the from_widget
-        if not y_overlap and to_y > from_y:
-            from_y = from_y + self.from_widget.boundingRect().height()
-        # Fix to_y value if from_widget is below the to widget
-        elif not y_overlap and from_y > to_y:
-            to_y = to_y + self.to_widget.boundingRect().height()
         color_obj = colors[self.color]
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))
-        self.setLine(from_x, from_y, to_x, to_y)
+        self.setLine(p1.x(), p1.y(), p2.x(), p2.y())
+        
+        if hasattr(self, 'text_item') and self.text_item:
+            mid_x = (p1.x() + p2.x()) / 2
+            mid_y = (p1.y() + p2.y()) / 2
+            br = self.text_item.boundingRect()
+            self.text_item.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
