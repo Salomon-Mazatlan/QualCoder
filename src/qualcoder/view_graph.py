@@ -447,6 +447,11 @@ class ViewGraph(QDialog):
         action_add_files = menu.addAction(_("Show files"))
         action_add_cases = menu.addAction(_("Show cases"))
         action_memos = menu.addAction(_("Show memos of coded segments"))
+        
+        # Propuesta: Se añade la opción "Ajustar gráfico a la pantalla" (Fit in View) para mejorar 
+        # la experiencia de navegación del usuario, escalando la vista automáticamente para ver todo el modelo.
+        action_fit_graph = menu.addAction("Ajustar gráfico a la pantalla")
+        
         action = menu.exec(self.ui.graphicsView.mapToGlobal(position))
         if action == action_add_text_item:
             self.add_text_item_to_graph(position.x(), position.y())
@@ -464,6 +469,14 @@ class ViewGraph(QDialog):
             self.add_files_to_graph()
         if action == action_add_cases:
             self.add_cases_to_graph()
+            
+        # Propuesta: Lógica para ajustar automáticamente la vista al contenido (Fit to view).
+        # Encuentra el rectángulo que envuelve a todos los elementos, le añade un margen 
+        # y ajusta el zoom para que todo el modelo sea visible de un solo vistazo preservando el aspect ratio.
+        if action == action_fit_graph:
+            rect = self.scene.itemsBoundingRect()
+            rect.adjust(-50, -50, 50, 50) # Añadir margen visual
+            self.ui.graphicsView.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
 
     def add_codes_of_av_files(self, x=10, y=10):
         """ Show selected codes of selected audio/video files as av graphics items.
@@ -2876,6 +2889,14 @@ class XFreeLineGraphicsItem(QtWidgets.QGraphicsLineItem):
         color_obj = colors[self.color]
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))
         self.setLine(from_x, from_y, to_x, to_y)
+        
+        # Propuesta: Recálculo dinámico de las coordenadas de la etiqueta.
+        # Garantiza que el texto se posicione en el punto medio exacto de la arista en cada evento de repintado.
+        if hasattr(self, 'text_item') and self.text_item:
+            mid_x = (from_x + to_x) / 2
+            mid_y = (from_y + to_y) / 2
+            br = self.text_item.boundingRect()
+            self.text_item.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
 
 
 class AVGraphicsItem(QtWidgets.QGraphicsPixmapItem):
@@ -3143,6 +3164,9 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         self.code_or_cat = code_or_cat
         self.font_size = font_size
         self.bold = bold
+        # Propuesta: Bandera de estado visual. Permite al usuario alternar la morfología geométrica de los nodos 
+        # (rectángulos vs elipses) para estructurar mapas mentales semánticos más estéticos y flexibles.
+        self.is_ellipse = False 
         self.setPos(self.code_or_cat['x'], self.code_or_cat['y'])
         self.text = displayed_text
         if self.text == "":
@@ -3187,7 +3211,13 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         painter.save()
         color = QtGui.QColor(self.code_or_cat['color'])
         painter.setBrush(QtGui.QBrush(color, style=QtCore.Qt.BrushStyle.SolidPattern))
-        painter.drawRect(self.boundingRect())
+        
+        # Propuesta: Renderizado condicional basado en la bandera de estado visual.
+        if getattr(self, 'is_ellipse', False):
+            painter.drawEllipse(self.boundingRect())
+        else:
+            painter.drawRect(self.boundingRect())
+            
         painter.restore()
         super().paint(painter, option, widget)
 
@@ -3204,18 +3234,41 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         coded_action = None
         case_action = None
         show_memo_action = None
+        
+        # Propuesta: Acciones para desplegar herramientas de análisis visual avanzado directo en los nodos.
+        add_text_segments_action = None
+        add_cooc_action = None
+        
         if self.code_or_cat['cid'] is not None:
+            # Propuesta: Expansión del menú contextual para integrar las funciones de importación relacional.
+            add_text_segments_action = menu.addAction('Importar segmentos y enlazar')
+            add_cooc_action = menu.addAction('Modelo de Co-ocurrencias (Estrella)')
             coded_action = menu.addAction('Coded text and media')
             case_action = menu.addAction('Case text and media')
+            
         if self.code_or_cat['memo'] != "":
             show_memo_action = menu.addAction(_("Display memo"))
         font_larger_action = menu.addAction(_("Larger font"))
         font_smaller_action = menu.addAction(_("Smaller font"))
         bold_action = menu.addAction(_("Bold toggle"))
         hide_action = menu.addAction('Hide')
+        
+        # Propuesta: Acción para invocar el alternador de morfología geométrica del nodo.
+        shape_action = menu.addAction('Alternar Forma (Elipse/Rect)')
+        
         action = menu.exec(QtGui.QCursor.pos())
         if action is None:
             return
+            
+        # Propuesta: Ejecución de eventos para las nuevas herramientas analíticas.
+        if action == shape_action:
+            self.is_ellipse = not self.is_ellipse
+            self.update() 
+        if action == add_text_segments_action:
+            self.add_coded_text_segments()
+        if action == add_cooc_action:
+            self.add_cooccurring_codes()
+            
         if action == show_memo_action:
             self.text = f"{self.code_or_cat['name']}\nMEMO: {self.code_or_cat['memo']}"
             self.setPlainText(self.text)
@@ -3250,6 +3303,114 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             self.case_media()
         if action == hide_action:
             self.hide()
+
+    def add_coded_text_segments(self):
+        """ 
+        # Propuesta: Herramienta de importación visual de segmentos. 
+        # Permite al investigador traer al lienzo (de forma interactiva) únicamente los 
+        # fragmentos textuales asociados a este código en particular. Genera automáticamente 
+        # una conexión de estilo punteado (dotted) y color gris para diferenciar 
+        # semánticamente las asociaciones de segmento vs las jerárquicas (sólidas).
+        """
+        cur = self.app.conn.cursor()
+        sql = "select code_text.cid, code_text.fid, code_text.seltext, ifnull(code_text.memo,''), code_text.ctid, source.name " \
+              "from code_text join source on source.id = code_text.fid where code_text.cid=?"
+        cur.execute(sql, [self.code_or_cat['cid']])
+        res = cur.fetchall()
+        
+        codings = []
+        for r in res:
+            coding_displayed = False
+            for item in self.scene().items():
+                if isinstance(item, FreeTextGraphicsItem) and item.ctid == r[4]:
+                    coding_displayed = True
+                    break
+            if not coding_displayed:
+                codings.append({'cid': r[0], 'fid': r[1], 'name': r[2], 'memo': r[3], 'ctid': r[4], 
+                                'filename': r[5], 'codename': self.code_or_cat['name']})
+        
+        if not codings:
+            Message(self.app, "Sin segmentos", "No hay segmentos de texto nuevos para este código.").exec()
+            return
+            
+        ui = DialogSelectItems(self.app, codings, "Seleccionar segmentos de texto", "multi")
+        if not ui.exec():
+            return
+            
+        selected_codings = ui.get_selected()
+        x = self.pos().x() + 150
+        y = self.pos().y()
+        
+        for s in selected_codings:
+            y += 40 
+            freetextid = 1
+            for item in self.scene().items():
+                if isinstance(item, FreeTextGraphicsItem) and item.freetextid >= freetextid:
+                    freetextid = item.freetextid + 1
+                    
+            item = FreeTextGraphicsItem(self.app, freetextid, x, y, s['name'], 9, "black", False, s['ctid'])
+            msg = f"File: {s['filename']}\nCode: {s['codename']}" + (f"\nMemo: {s['memo']}" if s['memo'] else "")
+            item.setToolTip(msg)
+            self.scene().addItem(item)
+            
+            # Línea Punteada y Gris para conexiones de segmentos
+            line_item = LinkGraphicsItem(self, item, line_width=1, line_type="dotted", color="gray", isvisible=True)
+            self.scene().addItem(line_item)
+
+    def add_cooccurring_codes(self):
+        """ 
+        # Propuesta: Visualizador avanzado de Redes de Co-ocurrencia (Estilo MAXQDA / Atlas.ti).
+        # Ejecuta un query analítico buscando superposiciones físicas (pos0 < pos1) 
+        # entre los rangos de codificación textual de la base SQLite.
+        # Despliega los nodos resultantes mediante un algoritmo de layout radial (circular) basado 
+        # en trigonometría para evitar la colisión visual, vinculándolos mediante aristas etiquetadas 
+        # que muestran cuantitativamente la frecuencia de la intersección geométrica.
+        """
+        cur = self.app.conn.cursor()
+        sql = """
+        SELECT c2.cid, n2.name, n2.color, COUNT(c2.cid) as overlap_count
+        FROM code_text c1
+        JOIN code_text c2 ON c1.fid = c2.fid AND c1.cid != c2.cid AND c1.pos0 < c2.pos1 AND c1.pos1 > c2.pos0
+        JOIN code_name n2 ON c2.cid = n2.cid
+        WHERE c1.cid = ?
+        GROUP BY c2.cid, n2.name, n2.color
+        """
+        cur.execute(sql, [self.code_or_cat['cid']])
+        res = cur.fetchall()
+        
+        if not res:
+            Message(self.app, "Sin co-ocurrencias", "No hay códigos que se sobrepongan con este en los textos.").exec()
+            return
+            
+        cooc_list = [{'cid': r[0], 'name': f"{r[1]} (Frecuencia: {r[3]})", 'raw_name': r[1], 'color': r[2], 'count': r[3]} for r in res]
+            
+        ui = DialogSelectItems(self.app, cooc_list, "Seleccionar códigos para el modelo", "multi")
+        if not ui.exec():
+            return
+            
+        selected = ui.get_selected()
+        
+        import math
+        radius = 250 # Tamaño de expansión del modelo estrella
+        angle_step = (2 * math.pi) / max(1, len(selected))
+        
+        for i, s in enumerate(selected):
+            target_node = next((item for item in self.scene().items() if isinstance(item, TextGraphicsItem) and item.code_or_cat['cid'] == s['cid']), None)
+                    
+            if not target_node:
+                # Disposición de Red Circular (Algoritmo de estrella)
+                angle = i * angle_step
+                cx = self.pos().x() + radius * math.cos(angle)
+                cy = self.pos().y() + radius * math.sin(angle)
+                
+                code_data = {'name': s['raw_name'], 'supercatid': None, 'catid': None, 'cid': s['cid'], 
+                             'x': cx, 'y': cy, 'color': s['color'], 'memo': "", 'child_names': []}
+                target_node = TextGraphicsItem(self.app, code_data)
+                self.scene().addItem(target_node)
+                
+            # Línea de color azul, estilo punteado y texto requerido "co-ocurrencia: X"
+            line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True, label=f"co-ocurrencia: {s['count']}")
+            self.scene().addItem(line_item)
 
     def add_edit_memo(self):
         """ Add or edit memos for codes and categories. """
@@ -3296,8 +3457,10 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
     text = ""
     color = "gray"
 
+    # Propuesta: Se amplía la firma del constructor con el parámetro opcional 'label=""' 
+    # para permitir que las conexiones (aristas) puedan renderizar información analítica (ej. frecuencias).
     def __init__(self, from_widget, to_widget, line_width=2, line_type="solid",
-                 color="gray", isvisible=True):
+                 color="gray", isvisible=True, label=""):
         """ Links codes and categories. Called when codes or categories of categories are inserted.
          param: from_widget  : TextGraphicsItem
          param: to_widget : TextGraphicsItem
@@ -3320,6 +3483,20 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.line_type = QtCore.Qt.PenStyle.SolidLine
         if line_type == "dotted":
             self.line_type = QtCore.Qt.PenStyle.DotLine
+            
+        # Propuesta: Renderizado robusto de etiquetas en las líneas. 
+        # Al inicializar un QGraphicsTextItem como hijo (`self`) de la línea, el motor de Qt 
+        # garantiza que el texto nunca sufrirá desincronización física si los nodos conectados son arrastrados rápidamente.
+        self.label = str(label)
+        self.text_item = None
+        if self.label:
+            self.text_item = QtWidgets.QGraphicsTextItem(self.label, self)
+            font = QtGui.QFont()
+            font.setPointSize(9)
+            font.setBold(True)
+            self.text_item.setFont(font)
+            self.text_item.setDefaultTextColor(QtGui.QColor("#0000CD")) # Azul para destacar atributos relacionales
+            
         self.redraw()
 
     def contextMenuEvent(self, event):
