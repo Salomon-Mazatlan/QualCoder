@@ -3242,7 +3242,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if self.code_or_cat['cid'] is not None:
             # Propuesta: Expansión del menú contextual para integrar las funciones de importación relacional.
             add_text_segments_action = menu.addAction('Importar segmentos y enlazar')
-            add_cooc_action = menu.addAction('Modelo de Co-ocurrencias (Estrella)')
+            add_cooc_action = menu.addAction('Importar Co-ocurrencias')
             coded_action = menu.addAction('Coded text and media')
             case_action = menu.addAction('Case text and media')
             
@@ -3306,7 +3306,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
 
     def add_coded_text_segments(self):
         """ 
-        # Propuesta: Herramienta de importación visual de segmentos. 
+        # Propuesta: Herramienta de importación de segmentos. 
         # Permite al investigador traer al lienzo (de forma interactiva) únicamente los 
         # fragmentos textuales asociados a este código en particular. Genera automáticamente 
         # una conexión de estilo punteado (dotted) y color gris para diferenciar 
