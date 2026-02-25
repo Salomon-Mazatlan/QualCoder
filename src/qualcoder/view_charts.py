@@ -176,22 +176,10 @@ class ViewCharts(QDialog):
         # SECCIÓN NUEVA: INTEGRACIÓN DE LISTA DESPLEGABLE INTERNA (A PRUEBA DE FALLOS)
         # =========================================================================
         
-        # 1. Directorio dinámico e inteligente (Soporta ejecutable y código fuente)
-        import sys
-        if getattr(sys, 'frozen', False):
-            # Si el programa está compilado (.exe), busca al lado del ejecutable
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            # Si se corre desde Python puro, busca al lado de este script
-            base_dir = os.path.dirname(__file__)
-            
-        self.stopword_dir = os.path.join(base_dir, "stopwords")
-        
+        # 1. Directorio dinámico apuntando a la nueva ubicación en "locale/stopwords"
+        self.stopword_dir = os.path.join(os.path.dirname(__file__), "locale", "stopwords")
         if not os.path.exists(self.stopword_dir):
-            try:
-                os.makedirs(self.stopword_dir, exist_ok=True)
-            except Exception:
-                pass # Evita errores si el ejecutable está en "Archivos de Programa" sin permisos
+            os.makedirs(self.stopword_dir, exist_ok=True)
 
         # 2. Referencia al botón original
         button = self.ui.pushButton_stopwords
@@ -257,8 +245,8 @@ class ViewCharts(QDialog):
         
         # Diccionarios
         iso_map = {
-            'es': 'Español (ES)', 'en': 'English (EN)', 'fr': 'Français (FR)',
-            'de': 'Deutsch (DE)', 'it': 'Italiano (IT)', 'pt': 'Português (PT)'
+            'es': 'Spanish (ES)', 'en': 'English (EN)', 'fr': 'French (FR)',
+            'de': 'German (DE)', 'it': 'Italian (IT)', 'pt': 'Portuguese (PT)'
         }
 
         if os.path.exists(self.stopword_dir):
