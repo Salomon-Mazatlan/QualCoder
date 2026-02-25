@@ -58,6 +58,7 @@ class ViewCharts(QDialog):
     attributes_msg = ""  # Tooltip msg for filtering based on attribute selection
     attribute_case_ids_and_names = []  # Used for Case heatmaps based on attribute selection
     stopwords_filepath = None
+    stopword_dir = ""  # Directorio interno dinámico para las stopwords
 
     def __init__(self, app):
         """ Set up the dialog. """
@@ -170,6 +171,66 @@ class ViewCharts(QDialog):
         wordcloud_ngram_options = ["1", "2", "3", "4"]
         self.ui.comboBox_ngrams.addItems(wordcloud_ngram_options)
         self.ui.pushButton_stopwords.clicked.connect(self.set_stopwords_filepath)
+        
+        # =========================================================================
+        # SECCIÓN NUEVA: INTEGRACIÓN DE LISTA DESPLEGABLE INTERNA (A PRUEBA DE FALLOS)
+        # =========================================================================
+        
+        # 1. Directorio dinámico e inteligente (Soporta ejecutable y código fuente)
+        import sys
+        if getattr(sys, 'frozen', False):
+            # Si el programa está compilado (.exe), busca al lado del ejecutable
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Si se corre desde Python puro, busca al lado de este script
+            base_dir = os.path.dirname(__file__)
+            
+        self.stopword_dir = os.path.join(base_dir, "stopwords")
+        
+        if not os.path.exists(self.stopword_dir):
+            try:
+                os.makedirs(self.stopword_dir, exist_ok=True)
+            except Exception:
+                pass # Evita errores si el ejecutable está en "Archivos de Programa" sin permisos
+
+        # 2. Referencia al botón original
+        button = self.ui.pushButton_stopwords
+        
+        # 3. Crear ComboBox
+        self.comboBox_stopword_lang = QtWidgets.QComboBox(button.parentWidget())
+        self.comboBox_stopword_lang.setToolTip(_("Select internal stopword list"))
+        self.comboBox_stopword_lang.setMinimumWidth(130) # Asegurar que tenga tamaño visible
+
+        # 4. Buscador exhaustivo del layout para insertar el combo box
+        inserted = False
+        for layout in self.findChildren(QtWidgets.QLayout):
+            idx = layout.indexOf(button)
+            if idx != -1:
+                # ¡Encontramos el layout del botón! Lo insertamos al lado.
+                if isinstance(layout, QtWidgets.QBoxLayout):
+                    layout.insertWidget(idx + 1, self.comboBox_stopword_lang)
+                    inserted = True
+                elif isinstance(layout, QtWidgets.QGridLayout):
+                    row, col, rowspan, colspan = layout.getItemPosition(idx)
+                    layout.addWidget(self.comboBox_stopword_lang, row, col + 1)
+                    inserted = True
+                break
+        
+        # PLAN B: Si la ventana fue diseñada sin layouts (coordenadas estáticas)
+        if not inserted:
+            geom = button.geometry()
+            # Posición = X del botón + Ancho del botón + 5 pixeles de margen
+            self.comboBox_stopword_lang.setGeometry(geom.x() + geom.width() + 5, geom.y(), 130, geom.height())
+
+        # Forzar que se muestre y esté por encima de todo
+        self.comboBox_stopword_lang.show()
+        self.comboBox_stopword_lang.raise_()
+
+        # 5. Cargar los idiomas detectados
+        self.fill_stopword_languages()
+        
+        # =========================================================================
+
         # QIntValidator does not use upper limits, it is based on number of digits entered. eg 999 possible
         self.ui.lineEdit_max_words.setValidator(QtGui.QIntValidator(50, 500))
         self.ui.lineEdit_max_words.setText("200")
@@ -187,6 +248,55 @@ class ViewCharts(QDialog):
         heatmap_combobox_list = ["", "File", "Case"]
         self.ui.comboBox_heatmap.addItems(heatmap_combobox_list)
         self.ui.comboBox_heatmap.currentIndexChanged.connect(self.make_heatmap)
+
+    # --- NUEVAS FUNCIONES PARA LISTA DE EXCLUSIÓN ---
+    def fill_stopword_languages(self):
+        """ Escanea la carpeta interna y detecta sufijos de idiomas. """
+        self.comboBox_stopword_lang.clear()
+        self.comboBox_stopword_lang.addItem(_("Default / No list"), None)
+        
+        # Diccionarios
+        iso_map = {
+            'es': 'Español (ES)', 'en': 'English (EN)', 'fr': 'Français (FR)',
+            'de': 'Deutsch (DE)', 'it': 'Italiano (IT)', 'pt': 'Português (PT)'
+        }
+
+        if os.path.exists(self.stopword_dir):
+            files = [f for f in os.listdir(self.stopword_dir) if f.endswith('.txt') and f != "vacio_seguridad.txt"]
+            for f in sorted(files):
+                # Extraer últimas 2 letras antes de .txt (ej: 'es' de lista_es.txt)
+                iso_code = f.replace('.txt', '')[-2:].lower()
+                display_name = iso_map.get(iso_code, f)
+                
+                # Guarda el nombre real del archivo en la memoria del combo box
+                self.comboBox_stopword_lang.addItem(display_name, f)
+
+    def get_selected_stopwords_path(self):
+        """ Determina de forma segura qué archivo enviar a la nube. """
+        # 1. Si el usuario subió uno manualmente, tiene prioridad.
+        if self.stopwords_filepath:
+            return self.stopwords_filepath
+        
+        # 2. Obtener el archivo del combo box interno
+        idx = self.comboBox_stopword_lang.currentIndex()
+        exact_filename = self.comboBox_stopword_lang.itemData(idx)
+        
+        if exact_filename:
+            lang_file = os.path.join(self.stopword_dir, exact_filename)
+            if os.path.exists(lang_file):
+                return lang_file
+
+        # 3. SALVAVIDAS: Evitar el crash [Errno 2] de QualCoder
+        fallback_file = os.path.join(self.stopword_dir, "vacio_seguridad.txt")
+        if not os.path.exists(fallback_file):
+            try:
+                with open(fallback_file, 'w', encoding='utf-8') as f:
+                    f.write("") # Archivo vacío temporal
+            except Exception as e:
+                logger.error("No se pudo crear archivo de seguridad: " + str(e))
+                
+        return fallback_file
+    # ------------------------------------------------
 
     # DATA FILTERS SECTION
     def select_attributes(self):
@@ -274,6 +384,7 @@ class ViewCharts(QDialog):
         if response[0] == "":
             self.stopwords_filepath = None
             self.ui.pushButton_stopwords.setIcon(QIcon())
+            # Si se cancela, resetear al combo box por defecto
             return
         self.stopwords_filepath = response[0]
         self.ui.pushButton_stopwords.setToolTip(response[0])
@@ -440,9 +551,17 @@ class ViewCharts(QDialog):
             self.ui.lineEdit_max_words.setText("200")
         reverse_colors = self.ui.checkBox_reverse_range.isChecked()
         ngrams = int( self.ui.comboBox_ngrams.currentText())
-        Wordcloud(self.app, text, width=width, height=height, max_words=max_words, background_color=background,
-                  text_color=foreground, reverse_colors=reverse_colors, ngrams=ngrams,
-                  stopwords_filepath2=self.stopwords_filepath)
+        
+        # --- LÓGICA INTEGRADORA NUEVA ---
+        final_stop_path = self.get_selected_stopwords_path()
+        try:
+            Wordcloud(self.app, text, width=width, height=height, max_words=max_words, background_color=background,
+                      text_color=foreground, reverse_colors=reverse_colors, ngrams=ngrams,
+                      stopwords_filepath2=final_stop_path)
+        except Exception as e:
+            logger.error(f"Error generating Wordcloud: {str(e)}")
+            Message(self.app, _("Error"), _("Error loading stopwords or generating wordcloud: ") + str(e)).exec()
+        # --------------------------------
 
     def codes_of_category_helper(self, category_name):
         """ Get child categories and codes of this category node.
