@@ -60,8 +60,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
         font = f'font: {self.app.settings["fontsize"]}pt "{self.app.settings["font"]}";'
         self.setStyleSheet(font)
+        
         self.ui.pushButton_export.setIcon(qta.icon('mdi6.export', options=[{'scale_factor': 1.4}]))
         self.ui.pushButton_export.pressed.connect(self.export_to_excel)
+
         self.ui.pushButton_select_files.setIcon(qta.icon('mdi6.file-outline', options=[{'scale_factor': 1.2}]))
         self.ui.pushButton_select_files.pressed.connect(self.select_files)
         self.ui.pushButton_file_attributes.setIcon(qta.icon('mdi6.variable', options=[{'scale_factor': 1.3}]))
@@ -342,6 +344,404 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                     self.data_colors[row][col] = colors[color_range_index]
         self.fill_table()
 
+    # --- ADDED: EXPORT TO GEPHI FUNCTION ---
+    def export_to_graphml(self):
+        """ Export co-occurrence data to GraphML format for network analysis in Gephi. """
+
+        filename = "Code_cooccurrence.graphml"
+        export_dir = ExportDirectoryPathDialog(self.app, filename)
+        filepath = export_dir.filepath
+        if filepath is None:
+            return
+
+        # Verificar qué filas O columnas (códigos) están visibles actualmente en la tabla
+        visible_indices = [i for i in range(len(self.selected_codes)) if not self.ui.tableWidget.isRowHidden(i) or not self.ui.tableWidget.isColumnHidden(i)]
+
+        if not visible_indices:
+            Message(self.app, _("No data"), _("No visible codes to export.")).exec()
+            return
+
+        # Start building the XML for GraphML manually to avoid dependency issues
+        xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        xml_content += '<graphml xmlns="http://graphml.graphdrawing.org/xmlns">\n'
+        xml_content += '  <key id="label" for="node" attr.name="label" attr.type="string"/>\n'
+        xml_content += '  <key id="weight" for="edge" attr.name="weight" attr.type="int"/>\n'
+        xml_content += '  <graph id="G" edgedefault="undirected">\n'
+
+        # 1. Add Nodes (Solo los visibles en filas o columnas)
+        for i in visible_indices:
+            code = self.selected_codes[i]
+            # Escape invalid XML characters in labels
+            name = str(code['name']).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
+            xml_content += f'    <node id="n{code["cid"]}">\n'
+            xml_content += f'      <data key="label">{name}</data>\n'
+            xml_content += '    </node>\n'
+
+        # 2. Add Edges (Solo entre nodos visibles)
+        edge_id = 0
+        for row in visible_indices:
+            for col in visible_indices:
+                count = self.data_counts[row][col]
+                if count > 0:
+                    source_cid = self.selected_codes[row]['cid']
+                    target_cid = self.selected_codes[col]['cid']
+                    xml_content += f'    <edge id="e{edge_id}" source="n{source_cid}" target="n{target_cid}">\n'
+                    xml_content += f'      <data key="weight">{count}</data>\n'
+                    xml_content += '    </edge>\n'
+                    edge_id += 1
+
+        xml_content += '  </graph>\n'
+        xml_content += '</graphml>\n'
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+            
+            msg = _('Exported GraphML for Gephi: ') + filepath
+            Message(self.app, _('Gephi Export'), msg, "information").exec()
+            self.parent_textEdit.append(msg)
+            
+        except Exception as e:
+            logger.error(f"Error exporting GraphML: {e}")
+            Message(self.app, _("Error"), str(e), "warning").exec()
+    # ---------------------------------------
+
+    # --- ADDED: VIEW INTERACTIVE GRAPH ---
+    def view_graph(self):
+        """ Display an interactive network graph of co-occurrences using networkx and matplotlib. """
+        try:
+            import networkx as nx
+            import matplotlib.pyplot as plt
+        except ImportError:
+            Message(self.app, _("Missing Libraries"), _("The 'networkx' and 'matplotlib' libraries are required to view the graph.")).exec()
+            return
+
+        G = nx.Graph()
+        
+        # Verificar qué filas O columnas (códigos) están visibles actualmente en la tabla
+        visible_indices = [i for i in range(len(self.selected_codes)) if not self.ui.tableWidget.isRowHidden(i) or not self.ui.tableWidget.isColumnHidden(i)]
+        
+        if not visible_indices:
+            Message(self.app, _("No data"), _("No visible codes to display in the graph.")).exec()
+            return
+
+        # 1. Add Nodes (Solo los visibles en filas o columnas)
+        for i in visible_indices:
+            G.add_node(self.selected_codes[i]['name'])
+            
+        # 2. Add Edges (Co-occurrences solo entre los códigos visibles)
+        for row in visible_indices:
+            for col in visible_indices:
+                count = self.data_counts[row][col]
+                if count > 0 and row != col:  # Avoid self-loops for cleaner graph
+                    source = self.selected_codes[row]['name']
+                    target = self.selected_codes[col]['name']
+                    G.add_edge(source, target, weight=count)
+                    
+        if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
+            Message(self.app, _("No data"), _("No co-occurrences to display in the graph.")).exec()
+            return
+
+        # Configure Matplotlib window
+        fig, ax = plt.subplots(figsize=(10, 8))
+        try:
+            fig.canvas.manager.set_window_title(_("Code Co-occurrence Graph"))
+        except Exception:
+            pass # Fallback for older matplotlib versions
+            
+        # -- PREVENT CRASH WITH LOG/LOGIT SCALES --
+        # Network graphs have arbitrary Cartesian coords (often negative) which break non-linear scale math.
+        # Intercept and ignore any attempt to set the scale to anything other than 'linear'.
+        _orig_set_xscale = ax.set_xscale
+        _orig_set_yscale = ax.set_yscale
+
+        def _safe_set_xscale(value, *args, **kwargs):
+            if value == 'linear':
+                _orig_set_xscale(value, *args, **kwargs)
+
+        def _safe_set_yscale(value, *args, **kwargs):
+            if value == 'linear':
+                _orig_set_yscale(value, *args, **kwargs)
+
+        ax.set_xscale = _safe_set_xscale
+        ax.set_yscale = _safe_set_yscale
+        # -----------------------------------------
+        
+        # Calculate optimal layout
+        pos = nx.spring_layout(G, k=0.8, iterations=50)
+        
+        # Calculate dynamic edge thickness based on co-occurrence count
+        weights = [G[u][v]['weight'] for u, v in G.edges()]
+        max_weight = max(weights) if weights else 1
+        normalized_weights = [(w / max_weight) * 4 + 1 for w in weights]
+        
+        # Calculate Edge Labels (Frecuencia de co-ocurrencia)
+        edge_labels = {(u, v): d['weight'] for u, v, d in G.edges(data=True)}
+
+        # Clase interactiva para arrastrar nodos
+        class DraggableGraph:
+            def __init__(self, G, pos, ax, fig):
+                self.G = G
+                self.pos = pos
+                self.ax = ax
+                self.fig = fig
+                self.selected_node = None
+                
+                self.draw_graph(first_draw=True)
+                
+                # Conectar eventos del ratón
+                self.fig.canvas.mpl_connect('button_press_event', self.on_press)
+                self.fig.canvas.mpl_connect('button_release_event', self.on_release)
+                self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
+
+            def draw_graph(self, first_draw=False):
+                # Guardar límites actuales de la pantalla para que no dé un "salto" visual
+                if not first_draw:
+                    xlim = self.ax.get_xlim()
+                    ylim = self.ax.get_ylim()
+                    
+                self.ax.clear()
+                self.ax.set_title(_("Code Co-occurrence Graph (Arrastra los nodos para moverlos)"))
+
+                # Draw Network Nodes and Edges
+                nx.draw_networkx_nodes(self.G, self.pos, ax=self.ax, node_size=800, node_color='#81BEF7', alpha=0.9, edgecolors='gray')
+                nx.draw_networkx_edges(self.G, self.pos, ax=self.ax, width=normalized_weights, edge_color='#A4A4A4', alpha=0.7)
+                nx.draw_networkx_labels(self.G, self.pos, ax=self.ax, font_size=10, font_family="sans-serif", font_weight='bold')
+                
+                # Draw Edge Labels
+                nx.draw_networkx_edge_labels(self.G, self.pos, ax=self.ax, edge_labels=edge_labels, font_size=9, font_color='darkred')
+
+                self.ax.margins(0.20)
+                self.ax.axis('off')
+                
+                # Restaurar los límites guardados previamente
+                if not first_draw:
+                    self.ax.set_xlim(xlim)
+                    self.ax.set_ylim(ylim)
+                    
+                self.fig.canvas.draw_idle()
+
+            def on_press(self, event):
+                if event.inaxes != self.ax: return
+                if event.button != 1: return # Solo responde al clic izquierdo
+
+                min_dist = float('inf')
+                closest_node = None
+
+                # Convertimos clics a coordenadas de píxeles para manejar el zoom de forma limpia
+                for node, (x, y) in self.pos.items():
+                    px, py = self.ax.transData.transform((x, y))
+                    dist = (px - event.x)**2 + (py - event.y)**2
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_node = node
+
+                # Tolerancia de ~24px para enganchar el ratón a un nodo
+                if min_dist < 600:
+                    self.selected_node = closest_node
+
+            def on_release(self, event):
+                self.selected_node = None # Soltar nodo
+
+            def on_motion(self, event):
+                if self.selected_node is None or event.inaxes != self.ax: return
+                if event.xdata is None or event.ydata is None: return
+
+                # Actualizar posición del nodo y redibujar
+                self.pos[self.selected_node] = (event.xdata, event.ydata)
+                self.draw_graph()
+
+        # Instanciar y guardar la referencia atada a la figura para evitar que desaparezca
+        fig._draggable_graph = DraggableGraph(G, pos, ax, fig)
+        
+        plt.tight_layout()
+        plt.show()
+    # ---------------------------------------
+
+    # --- ADDED: VIEW CLUSTER / COMMUNITY GRAPH ---
+    def view_cluster_graph(self):
+        """ Display an interactive network graph colored by community (Cluster Analysis) like MAXQDA's Code Map. """
+        try:
+            import networkx as nx
+            import matplotlib.pyplot as plt
+            import matplotlib.cm as cm
+        except ImportError:
+            Message(self.app, _("Missing Libraries"), _("The 'networkx' and 'matplotlib' libraries are required for Cluster Analysis.")).exec()
+            return
+
+        G = nx.Graph()
+        
+        # Verificar qué filas O columnas están visibles
+        visible_indices = [i for i in range(len(self.selected_codes)) if not self.ui.tableWidget.isRowHidden(i) or not self.ui.tableWidget.isColumnHidden(i)]
+        
+        if not visible_indices:
+            Message(self.app, _("No data"), _("No visible codes to display in the graph.")).exec()
+            return
+
+        # 1. Add Nodes
+        for i in visible_indices:
+            G.add_node(self.selected_codes[i]['name'])
+            
+        # 2. Add Edges (con peso para el algoritmo de clusters)
+        for row in visible_indices:
+            for col in visible_indices:
+                count = self.data_counts[row][col]
+                if count > 0 and row != col:
+                    source = self.selected_codes[row]['name']
+                    target = self.selected_codes[col]['name']
+                    G.add_edge(source, target, weight=count)
+                    # Añadimos distancia inversa para el layout MDS (Multidimensional Scaling)
+                    G[source][target]['distance'] = 1.0 / count
+                    
+        if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
+            Message(self.app, _("No data"), _("No co-occurrences to display for cluster analysis.")).exec()
+            return
+
+        # 3. Detectar Comunidades (Estilo MAXQDA Code Map)
+        # Filtramos las conexiones débiles (ruido) para obligar al algoritmo a detectar clústeres reales,
+        # evitando el "resolution limit" que causa que grafos densos se dividan en solo 2 mitades.
+        weights_list = [d['weight'] for u, v, d in G.edges(data=True)]
+        mean_w = sum(weights_list) / len(weights_list) if weights_list else 0
+        
+        G_strong = nx.Graph()
+        G_strong.add_nodes_from(G.nodes())
+        for u, v, d in G.edges(data=True):
+            if d['weight'] >= mean_w:  # Solo analizamos clústeres con co-ocurrencias fuertes
+                G_strong.add_edge(u, v, weight=d['weight'])
+
+        try:
+            from networkx.algorithms.community import louvain_communities
+            # Louvain suele ser más analítico y preciso
+            communities = list(louvain_communities(G_strong, weight='weight'))
+        except ImportError:
+            try:
+                from networkx.algorithms.community import greedy_modularity_communities
+                communities = list(greedy_modularity_communities(G_strong, weight='weight'))
+            except ImportError:
+                communities = [list(G.nodes())]
+            
+        # Crear mapa de nodo a ID de comunidad
+        node_community = {}
+        for comm_id, comm in enumerate(communities):
+            for node in comm:
+                node_community[node] = comm_id
+                
+        # Asignar un color de una paleta a cada nodo basado en su comunidad
+        cmap = plt.get_cmap('tab20')
+        # Si un nodo no entró a G_strong (aislado), le asignamos el color 0 por defecto
+        node_colors = [cmap(node_community.get(node, 0) % 20) for node in G.nodes()]
+
+        # Configure Matplotlib window
+        fig, ax = plt.subplots(figsize=(10, 8))
+        try:
+            fig.canvas.manager.set_window_title(_("Cluster Analysis Graph (Families / Code Map)"))
+        except Exception:
+            pass
+            
+        # -- PREVENT CRASH WITH LOG/LOGIT SCALES --
+        _orig_set_xscale = ax.set_xscale
+        _orig_set_yscale = ax.set_yscale
+
+        def _safe_set_xscale(value, *args, **kwargs):
+            if value == 'linear':
+                _orig_set_xscale(value, *args, **kwargs)
+
+        def _safe_set_yscale(value, *args, **kwargs):
+            if value == 'linear':
+                _orig_set_yscale(value, *args, **kwargs)
+
+        ax.set_xscale = _safe_set_xscale
+        ax.set_yscale = _safe_set_yscale
+        # -----------------------------------------
+        
+        # Calculate layout
+        # Kamada Kawai hace la función de un "Multidimensional Scaling" (MDS) usado por MAXQDA.
+        # Acercará los códigos de la misma familia y empujará lejos los no relacionados.
+        try:
+            if nx.is_connected(G):
+                pos = nx.kamada_kawai_layout(G, weight='distance')
+            else:
+                # Fallback si el grafo está desconectado en varias "islas"
+                pos = nx.spring_layout(G, k=1.2, weight='weight', iterations=80)
+        except Exception:
+            pos = nx.spring_layout(G, k=1.2, weight='weight', iterations=80)
+        
+        weights = [G[u][v]['weight'] for u, v in G.edges()]
+        max_weight = max(weights) if weights else 1
+        normalized_weights = [(w / max_weight) * 4 + 1 for w in weights]
+        edge_labels = {(u, v): d['weight'] for u, v, d in G.edges(data=True)}
+
+        class DraggableClusterGraph:
+            def __init__(self, G, pos, ax, fig, colors):
+                self.G = G
+                self.pos = pos
+                self.ax = ax
+                self.fig = fig
+                self.colors = colors
+                self.selected_node = None
+                
+                self.draw_graph(first_draw=True)
+                
+                self.fig.canvas.mpl_connect('button_press_event', self.on_press)
+                self.fig.canvas.mpl_connect('button_release_event', self.on_release)
+                self.fig.canvas.mpl_connect('motion_notify_event', self.on_motion)
+
+            def draw_graph(self, first_draw=False):
+                if not first_draw:
+                    xlim = self.ax.get_xlim()
+                    ylim = self.ax.get_ylim()
+                    
+                self.ax.clear()
+                self.ax.set_title(_("Mapa de Códigos (Nodos del mismo color forman una comunidad/cluster)"))
+
+                # Dibujar Nodos aplicando los colores de sus respectivas comunidades
+                nx.draw_networkx_nodes(self.G, self.pos, ax=self.ax, node_size=800, node_color=self.colors, alpha=0.9, edgecolors='gray')
+                nx.draw_networkx_edges(self.G, self.pos, ax=self.ax, width=normalized_weights, edge_color='#A4A4A4', alpha=0.5)
+                nx.draw_networkx_labels(self.G, self.pos, ax=self.ax, font_size=10, font_family="sans-serif", font_weight='bold')
+                nx.draw_networkx_edge_labels(self.G, self.pos, ax=self.ax, edge_labels=edge_labels, font_size=9, font_color='darkred')
+
+                self.ax.margins(0.20)
+                self.ax.axis('off')
+                
+                if not first_draw:
+                    self.ax.set_xlim(xlim)
+                    self.ax.set_ylim(ylim)
+                    
+                self.fig.canvas.draw_idle()
+
+            def on_press(self, event):
+                if event.inaxes != self.ax: return
+                if event.button != 1: return
+
+                min_dist = float('inf')
+                closest_node = None
+
+                for node, (x, y) in self.pos.items():
+                    px, py = self.ax.transData.transform((x, y))
+                    dist = (px - event.x)**2 + (py - event.y)**2
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_node = node
+
+                if min_dist < 600:
+                    self.selected_node = closest_node
+
+            def on_release(self, event):
+                self.selected_node = None
+
+            def on_motion(self, event):
+                if self.selected_node is None or event.inaxes != self.ax: return
+                if event.xdata is None or event.ydata is None: return
+
+                self.pos[self.selected_node] = (event.xdata, event.ydata)
+                self.draw_graph()
+
+        fig._draggable_graph = DraggableClusterGraph(G, pos, ax, fig, node_colors)
+        
+        plt.tight_layout()
+        plt.show()
+    # ---------------------------------------
+
     def export_to_excel(self):
         """ Export to Excel file. """
 
@@ -498,70 +898,100 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         self.ui.splitter.setSizes([300, 200])
 
     def table_menu(self, position):
-        """ Context menu for creating a new code by merging existing codes.
+        """ Context menu for creating a new code by merging existing codes,
+        exporting to Gephi, viewing graph, and cluster analysis.
         """
+
+        menu = QtWidgets.QMenu()
+        menu.setStyleSheet("QMenu {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
+        
+        # New options added to the context menu
+        action_gephi = menu.addAction(qta.icon('mdi6.graph-outline'), _("Export to Gephi (GraphML)"))
+        action_view_graph = menu.addAction(qta.icon('mdi6.eye'), _("View Co-occurrence Graph"))
+        
+        # ADDED: Option for Cluster Analysis
+        action_view_cluster = menu.addAction(qta.icon('mdi6.shape-outline'), _("View Cluster Analysis (Families)"))
+        
+        menu.addSeparator()
 
         row = self.ui.tableWidget.currentRow()
         col = self.ui.tableWidget.currentColumn()
-        text = self.ui.tableWidget.item(row, col).text()
-        if text == "":
-            return
-        menu = QtWidgets.QMenu()
-        menu.setStyleSheet("QMenu {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
-        action_merge = menu.addAction(_("Merge into new code"))
+        action_merge = None
+        
+        # Merge option is only available when a cell with data is clicked
+        if row >= 0 and col >= 0:
+            item = self.ui.tableWidget.item(row, col)
+            if item is not None and item.text() != "":
+                action_merge = menu.addAction(_("Merge into new code"))
+                
         action = menu.exec(self.ui.tableWidget.mapToGlobal(position))
-        if action is not action_merge:
+        
+        if action is None:
             return
-        new_code_name = self.ui.tableWidget.horizontalHeaderItem(col).text() + " | "
-        new_code_name += self.ui.tableWidget.verticalHeaderItem(row).text()
-        new_code_name = new_code_name.replace("\n", "")
-        new_code_name, ok = QtWidgets.QInputDialog.getText(self, _("New code"), " " * 30 + _("Edit name:") + " " * 30,
-                                                           QtWidgets.QLineEdit.EchoMode.Normal, new_code_name)
-        memo = _("Merged: ") + new_code_name
-        if not ok or new_code_name == '':
+            
+        if action == action_gephi:
+            self.export_to_graphml()
             return
-        # Insert new code name
-        codes = self.app.get_code_names()
-        if any(code['name'] == new_code_name for code in codes):
-            Message(self.app, _("Code name exists"), _("Choose another code name")).exec()
-            return
-        cur = self.app.conn.cursor()
-        now_date = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
-        cur.execute("insert into code_name (name,memo,owner,date,catid,color) values(?,?,?,?,?,?)",
-                    (new_code_name, memo, self.app.settings['codername'], now_date,
-                     None, "#DDE600"))  # Vibrant yellow colour
-        self.app.conn.commit()
-        self.app.delete_backup = False
-        cur.execute("select last_insert_rowid()")
-        new_code_cid = cur.fetchone()[0]
-        self.parent_textEdit.append(_("New code: ") + new_code_name)
 
-        # Create new coded segments
-        data_list = self.data_details[row][col]
-        ''' data item list object:
-        0 - 5 cid0, name, ctid0, cid1, c1_name, ctid1, 
-        6 - 8 fid, file_name, owners, 
-        9 - 12 c0_pos0, c0_pos1, c1_pos0, c1_pos1,
-        13 - 16 text_before, text_overlap, text_after, relation
-        '''
-        for item in data_list:
-            pos0 = min(item[9], item[11])
-            pos1 = max(item[10], item[12])
-            # Note substr() function started at 1, not 0, so + 1
-            cur.execute("select substr(fulltext,?,?) from source where id=?", [pos0 + 1, pos1 - pos0, item[6]])
-            seltext = cur.fetchone()[0]
+        if action == action_view_graph:
+            self.view_graph()
+            return
 
-            # Create item details to put into code_text
-            try:
-                cur.execute("insert into code_text (cid,fid,seltext,pos0,pos1,owner,\
-                            memo,date, important) values(?,?,?,?,?,?,?,?,?)", (new_code_cid, item[6],
-                                                                               seltext, pos0, pos1,
-                                                                               self.app.settings['codername'],
-                                                                               memo, now_date, None))
-                self.app.conn.commit()
-            except Exception as e_:
-                print(e_)
-                logger.debug(e_)
+        if action == action_view_cluster:
+            self.view_cluster_graph()
+            return
+            
+        if action_merge and action == action_merge:
+            new_code_name = self.ui.tableWidget.horizontalHeaderItem(col).text() + " | "
+            new_code_name += self.ui.tableWidget.verticalHeaderItem(row).text()
+            new_code_name = new_code_name.replace("\n", "")
+            new_code_name, ok = QtWidgets.QInputDialog.getText(self, _("New code"), " " * 30 + _("Edit name:") + " " * 30,
+                                                               QtWidgets.QLineEdit.EchoMode.Normal, new_code_name)
+            memo = _("Merged: ") + new_code_name
+            if not ok or new_code_name == '':
+                return
+            # Insert new code name
+            codes = self.app.get_code_names()
+            if any(code['name'] == new_code_name for code in codes):
+                Message(self.app, _("Code name exists"), _("Choose another code name")).exec()
+                return
+            cur = self.app.conn.cursor()
+            now_date = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute("insert into code_name (name,memo,owner,date,catid,color) values(?,?,?,?,?,?)",
+                        (new_code_name, memo, self.app.settings['codername'], now_date,
+                         None, "#DDE600"))  # Vibrant yellow colour
+            self.app.conn.commit()
+            self.app.delete_backup = False
+            cur.execute("select last_insert_rowid()")
+            new_code_cid = cur.fetchone()[0]
+            self.parent_textEdit.append(_("New code: ") + new_code_name)
+
+            # Create new coded segments
+            data_list = self.data_details[row][col]
+            ''' data item list object:
+            0 - 5 cid0, name, ctid0, cid1, c1_name, ctid1, 
+            6 - 8 fid, file_name, owners, 
+            9 - 12 c0_pos0, c0_pos1, c1_pos0, c1_pos1,
+            13 - 16 text_before, text_overlap, text_after, relation
+            '''
+            for item in data_list:
+                pos0 = min(item[9], item[11])
+                pos1 = max(item[10], item[12])
+                # Note substr() function started at 1, not 0, so + 1
+                cur.execute("select substr(fulltext,?,?) from source where id=?", [pos0 + 1, pos1 - pos0, item[6]])
+                seltext = cur.fetchone()[0]
+
+                # Create item details to put into code_text
+                try:
+                    cur.execute("insert into code_text (cid,fid,seltext,pos0,pos1,owner,\
+                                memo,date, important) values(?,?,?,?,?,?,?,?,?)", (new_code_cid, item[6],
+                                                                                   seltext, pos0, pos1,
+                                                                                   self.app.settings['codername'],
+                                                                                   memo, now_date, None))
+                    self.app.conn.commit()
+                except Exception as e_:
+                    print(e_)
+                    logger.debug(e_)
 
     def fill_table(self):
         """ Fill table using code names alphabetically (case insensitive), using self.data """
@@ -590,7 +1020,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                     item.setForeground(QtGui.QBrush(QtGui.QColor("#000000")))
                 if cell_data > 0:
                     item.setData(QtCore.Qt.ItemDataRole.DisplayRole, cell_data)
-                    msg = _("Left click: Show coded text.\nRight click: Create new combined code from these codes.")
+                    msg = _("Left click: Show coded text.\nRight click: Export/View graphs or merge codes.")
                     item.setToolTip(msg)
                 item.setFlags(item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
                 self.ui.tableWidget.setItem(row, col, item)
