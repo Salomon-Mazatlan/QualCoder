@@ -24,6 +24,7 @@ from collections import Counter
 from copy import copy, deepcopy
 import logging
 import os
+import tempfile
 import pandas as pd
 import plotly.express as px
 import qtawesome as qta  # see: https://pictogrammers.com/library/mdi/
@@ -58,7 +59,6 @@ class ViewCharts(QDialog):
     attributes_msg = ""  # Tooltip msg for filtering based on attribute selection
     attribute_case_ids_and_names = []  # Used for Case heatmaps based on attribute selection
     stopwords_filepath = None
-    stopword_dir = ""  # Directorio interno dinámico para las stopwords
 
     def __init__(self, app):
         """ Set up the dialog. """
@@ -176,20 +176,15 @@ class ViewCharts(QDialog):
         # SECCIÓN NUEVA: INTEGRACIÓN DE LISTA DESPLEGABLE INTERNA (A PRUEBA DE FALLOS)
         # =========================================================================
         
-        # 1. Directorio dinámico apuntando a la nueva ubicación en "locale/stopwords"
-        self.stopword_dir = os.path.join(os.path.dirname(__file__), "locale", "stopwords")
-        if not os.path.exists(self.stopword_dir):
-            os.makedirs(self.stopword_dir, exist_ok=True)
-
-        # 2. Referencia al botón original
+        # 1. Referencia al botón original
         button = self.ui.pushButton_stopwords
         
-        # 3. Crear ComboBox
+        # 2. Crear ComboBox
         self.comboBox_stopword_lang = QtWidgets.QComboBox(button.parentWidget())
         self.comboBox_stopword_lang.setToolTip(_("Select internal stopword list"))
         self.comboBox_stopword_lang.setMinimumWidth(130) # Asegurar que tenga tamaño visible
 
-        # 4. Buscador exhaustivo del layout para insertar el combo box
+        # 3. Buscador exhaustivo del layout para insertar el combo box
         inserted = False
         for layout in self.findChildren(QtWidgets.QLayout):
             idx = layout.indexOf(button)
@@ -214,7 +209,7 @@ class ViewCharts(QDialog):
         self.comboBox_stopword_lang.show()
         self.comboBox_stopword_lang.raise_()
 
-        # 5. Cargar los idiomas detectados
+        # 4. Cargar los idiomas detectados de manera estandarizada
         self.fill_stopword_languages()
         
         # =========================================================================
@@ -239,47 +234,55 @@ class ViewCharts(QDialog):
 
     # --- NUEVAS FUNCIONES PARA LISTA DE EXCLUSIÓN ---
     def fill_stopword_languages(self):
-        """ Escanea la carpeta interna y detecta sufijos de idiomas. """
+        """ Rellena la lista usando los nombres de idiomas de Settings.py """
         self.comboBox_stopword_lang.clear()
         self.comboBox_stopword_lang.addItem(_("Default / No list"), None)
         
-        # Diccionarios
-        iso_map = {
-            'es': 'Spanish (ES)', 'en': 'English (EN)', 'fr': 'French (FR)',
-            'de': 'German (DE)', 'it': 'Italian (IT)', 'pt': 'Portuguese (PT)'
-        }
-
-        if os.path.exists(self.stopword_dir):
-            files = [f for f in os.listdir(self.stopword_dir) if f.endswith('.txt') and f != "vacio_seguridad.txt"]
-            for f in sorted(files):
-                # Extraer últimas 2 letras antes de .txt (ej: 'es' de lista_es.txt)
-                iso_code = f.replace('.txt', '')[-2:].lower()
-                display_name = iso_map.get(iso_code, f)
-                
-                # Guarda el nombre real del archivo en la memoria del combo box
-                self.comboBox_stopword_lang.addItem(display_name, f)
+        # Usamos la lista de Settings.py para consistencia, descartando Svenska sv y Chinese zh como se sugirió
+        languages = ["Deutsch de", "English en", "Español es", "Français fr", "Italiano it", "日本語 ja", "Português pt"]
+        
+        for lang in languages:
+            # Extraer las últimas 2 letras como código identificador (ej: 'es' de 'Español es')
+            lang_code = lang[-2:]
+            self.comboBox_stopword_lang.addItem(lang, lang_code)
 
     def get_selected_stopwords_path(self):
-        """ Determina de forma segura qué archivo enviar a la nube. """
+        """ Determina de forma segura qué archivo enviar a la nube (Wordcloud). """
         # 1. Si el usuario subió uno manualmente, tiene prioridad.
         if self.stopwords_filepath:
             return self.stopwords_filepath
         
-        # 2. Obtener el archivo del combo box interno
+        # 2. Obtener el código de idioma (ej: 'es') del combo box interno
         idx = self.comboBox_stopword_lang.currentIndex()
-        exact_filename = self.comboBox_stopword_lang.itemData(idx)
+        lang_code = self.comboBox_stopword_lang.itemData(idx)
         
-        if exact_filename:
-            lang_file = os.path.join(self.stopword_dir, exact_filename)
-            if os.path.exists(lang_file):
-                return lang_file
+        if lang_code:
+            # OPCIÓN A: Intentar usar el módulo recomendado stopwords.py
+            try:
+                from . import stopwords
+                words_string = getattr(stopwords, lang_code, None)
+                if words_string:
+                    # Guardamos las palabras en un archivo temporal seguro para que simple_wordcloud pueda abrirlo
+                    temp_path = os.path.join(tempfile.gettempdir(), f"qc_stopwords_{lang_code}.txt")
+                    with open(temp_path, 'w', encoding='utf-8') as f:
+                        # .split() separa las palabras y luego se unen por saltos de linea
+                        f.write("\n".join(words_string.split()))
+                    return temp_path
+            except (ImportError, AttributeError):
+                pass  # El módulo no existe aún o no tiene ese idioma definido
+                
+            # OPCIÓN B: Intentar ubicar en la carpeta Examples con nomenclatura consistente (stopwords_es.txt)
+            examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Examples")
+            example_file = os.path.join(examples_dir, f"stopwords_{lang_code}.txt")
+            if os.path.exists(example_file):
+                return example_file
 
-        # 3. SALVAVIDAS: Evitar el crash [Errno 2] de QualCoder
-        fallback_file = os.path.join(self.stopword_dir, "vacio_seguridad.txt")
+        # 3. SALVAVIDAS: Evitar el crash [Errno 2] de QualCoder usando un archivo temporal en el sistema
+        fallback_file = os.path.join(tempfile.gettempdir(), "qc_vacio_seguridad.txt")
         if not os.path.exists(fallback_file):
             try:
                 with open(fallback_file, 'w', encoding='utf-8') as f:
-                    f.write("") # Archivo vacío temporal
+                    f.write("") # Archivo vacío temporal inofensivo
             except Exception as e:
                 logger.error("No se pudo crear archivo de seguridad: " + str(e))
                 
