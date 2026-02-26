@@ -207,7 +207,10 @@ class DialogCodeText(QtWidgets.QWidget):
         # Variables associated with right-hand side splitter, for project memo, code rule
         self.project_memo = False
         self.code_rule = False
-
+        # --- OPCIONES VISUALES (Toggles) ---
+        self.show_margin_stripes = True
+        self.highlight_style = self.app.settings.get('highlight_style', 'underline')
+        # ----------------------------------------------------------------
         # Variables for Edit mode
         self.text = ""
         self.ed_codetext = []
@@ -301,6 +304,12 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.pushButton_show_all_codings.pressed.connect(self.show_all_codes_in_text)
         self.ui.pushButton_important.setIcon(qta.icon('mdi6.star-outline', options=[{'scale_factor': 1.3}]))
         self.ui.pushButton_important.pressed.connect(self.show_important_coded)
+        # --- Conectar los botones de la interfaz ---
+        self.ui.pushButton_toggle_margin.setToolTip(_("Toggle code stripes margin"))
+        self.ui.pushButton_toggle_margin.pressed.connect(self.toggle_margin)
+        self.ui.pushButton_toggle_highlight.setToolTip(_("Toggle highlight style (Underline/Marker)"))
+        self.ui.pushButton_toggle_highlight.pressed.connect(self.toggle_highlight_style)
+        # ---------------------------------------------------------------
         # Right hand side splitter buttons
         self.ui.pushButton_code_rule.setIcon(qta.icon('mdi6.text-shadow'))
         self.ui.pushButton_code_rule.pressed.connect(self.show_code_rule)
@@ -439,6 +448,28 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ai_search_spinner_index = 0
         self.ai_search_spinner_timer = QtCore.QTimer(self)
         self.ai_search_spinner_timer.timeout.connect(self.ai_search_update_spinner)
+
+    # --- Funciones Toggles ---
+    def toggle_margin(self):
+        """ Toggle the visibility of the left margin with code stripes """
+        self.show_margin_stripes = not self.show_margin_stripes
+        if hasattr(self, 'coding_margin'):
+            self.coding_margin.setVisible(self.show_margin_stripes)
+        if self.show_margin_stripes:
+            self.ui.plainTextEdit.setViewportMargins(125, 0, 0, 0)
+        else:
+            self.ui.plainTextEdit.setViewportMargins(0, 0, 0, 0)
+
+    def toggle_highlight_style(self):
+        """ Toggle between underline and marker highlighting """
+        if self.highlight_style == 'underline':
+            self.highlight_style = 'marker'
+        else:
+            self.highlight_style = 'underline'
+        # Guardar en las preferencias para que se recuerde la decisión
+        self.app.settings['highlight_style'] = self.highlight_style
+        self.highlight()
+    # ----------------------------------
 
     def help(self):
         """ Open help for transcribe section in browser. """
@@ -2307,95 +2338,433 @@ class DialogCodeText(QtWidgets.QWidget):
 
     def export_odt_file(self):
         """ Export text to open document format with .odt ending.
-        QTextWriter supports plaintext, ODF and HTML.
-        Cannot export tooltips.
-        Called by export_option_selected
-        """
+        Includes a popup to select between visual immersion, clean reading, and analytical report. """
+        if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "":
+            return
+            
+        opt_visual = _("Segmentos y códigos")
+        opt_textual = _("Lectura limpia (codigos como comentarios de segmentos)")
+        opt_analitica = _("Reporte Analítico: Matriz, Memos y segmentos codificados")
+        
+        options_list = [opt_visual, opt_textual, opt_analitica]
+        
+        item_selected, ok = QtWidgets.QInputDialog.getItem(
+            self, 
+            _("Opciones de Exportación ODT"),
+            _("Seleccione el enfoque del reporte analítico:"), 
+            options_list, 
+            0, 
+            False
+        )
+        if not ok or not item_selected:
+            return
 
-        if len(self.ui.plainTextEdit.document().toPlainText()) == 0:
+        filename = self.file_['name'] + ".odt"
+        options = QtWidgets.QFileDialog.Option.DontResolveSymlinks
+        
+        home_dir = os.getenv('HOME')
+        if not home_dir:
+            home_dir = os.path.expanduser('~')
+        last_dir = self.app.settings.get('directory', home_dir)
+            
+        filepath, file_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            _("Guardar exportación ODT"),
+            os.path.join(last_dir, filename),
+            _("Open Document Text (*.odt)"),
+            options=options
+        )
+        if not filepath:
             return
-        filename = f"{self.file_['name']}.odt"
-        exp_dir = ExportDirectoryPathDialog(self.app, filename)
-        filepath = exp_dir.filepath
-        if filepath is None:
-            return
+            
+        if not filepath.endswith('.odt'):
+            filepath += '.odt'
+            
+        self.app.settings['directory'] = os.path.dirname(filepath)
+
+        temp_doc = self.ui.plainTextEdit.document().clone()
+        cursor = QtGui.QTextCursor(temp_doc)
+        original_text = temp_doc.toPlainText()
+        
+        current_fid = self.file_['id']
+        offset = self.file_['start']
+        codes_in_file = [c for c in self.code_text if c['fid'] == current_fid]
+        
+        if item_selected == opt_textual:
+            cursor.select(QtGui.QTextCursor.SelectionType.Document)
+            fmt_clear = QtGui.QTextCharFormat()
+            fmt_clear.clearBackground()
+            fmt_clear.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
+            cursor.setCharFormat(fmt_clear)
+            cursor.clearSelection()
+
+        # Extraer todos los segmentos y sus memos para el Reporte Analítico
+        segments_list = []
+        if item_selected == opt_analitica:
+            codes_in_file_sorted = sorted(codes_in_file, key=lambda x: x['pos0'])
+            for c in codes_in_file_sorted:
+                p0 = max(0, int(c['pos0']) - offset)
+                p1 = min(len(original_text), int(c['pos1']) - offset)
+                seg = original_text[p0:p1]
+                memo_raw = c.get('memo')
+                memo_str = str(memo_raw).strip() if memo_raw else ""
+                segments_list.append({
+                    'name': c['name'], 
+                    'color': c['color'], 
+                    'segment': seg, 
+                    'memo': memo_str
+                })
+
+        from .color_selector import TextColor 
+        
+        if item_selected == opt_textual:
+            events = []
+            for i, c in enumerate(codes_in_file):
+                events.append({'pos': int(c['pos1']) - offset, 'type': 'end', 'id': i, 'name': c['name']})
+                events.append({'pos': int(c['pos0']) - offset, 'type': 'start', 'id': i, 'name': c['name']})
+            events.sort(key=lambda x: (x['pos'], 1 if x['type'] == 'end' else 0), reverse=True)
+            
+            tag_fmt = QtGui.QTextCharFormat()
+            tag_fmt.setForeground(QBrush(QColor("gray")))
+            tag_fmt.setFontItalic(True)
+            tag_fmt.clearBackground()
+            tag_fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
+            
+            for ev in events:
+                if 0 <= ev['pos'] <= len(temp_doc.toPlainText()):
+                    cursor.setPosition(ev['pos'])
+                    if ev['type'] == 'end':
+                        cursor.insertText(f"@@QC_CMT_END_{ev['id']}@@", tag_fmt)
+                    else:
+                        cursor.insertText(f"@@QC_CMT_START_{ev['id']}_{ev['name']}@@", tag_fmt)
+        else:
+            codes_sorted = sorted(codes_in_file, key=lambda x: x['pos1'], reverse=True)
+            for item_code in codes_sorted:
+                pos = int(item_code['pos1']) - offset
+                if 0 <= pos <= len(temp_doc.toPlainText()):
+                    cursor.setPosition(pos)
+                    
+                    tag_fmt = QtGui.QTextCharFormat()
+                    tag_fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
+                    # Añadido el prefijo "Código:"
+                    tag_text = f" [Código: {item_code['name']}] "
+                    
+                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.EndOfBlock)
+                    
+                    brush = QBrush(QColor(item_code['color']))
+                    tag_fmt.setBackground(brush)
+                    fg_color = TextColor(item_code['color']).recommendation
+                    tag_fmt.setForeground(QBrush(QColor(fg_color)))
+                    tag_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+                    
+                    cursor.insertText("\n" + tag_text, tag_fmt)
+
+        if item_selected == opt_analitica:
+            # Ir al inicio absoluto para construir el reporte
+            cursor.setPosition(0)
+            
+            title_fmt = QtGui.QTextCharFormat()
+            title_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+            
+            # 1. Encabezado principal
+            cursor.insertText(_("Análisis de codificación") + "\n\n", title_fmt)
+            
+            # 2. Construir la Tabla de Frecuencias
+            total_chars = max(len(original_text), 1)
+            code_stats = {}
+            for c in codes_in_file:
+                c_name = c['name']
+                c_len = c['pos1'] - c['pos0']
+                if c_name not in code_stats:
+                    code_stats[c_name] = {'color': c['color'], 'len': 0, 'freq': 0, 'owners': set()}
+                code_stats[c_name]['len'] += c_len
+                code_stats[c_name]['freq'] += 1
+                code_stats[c_name]['owners'].add(c['owner'])
+                
+            rows = len(code_stats) + 1
+            table_fmt = QtGui.QTextTableFormat()
+            table_fmt.setBorder(0.5)
+            table_fmt.setCellPadding(4)
+            table_fmt.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+            table = cursor.insertTable(rows, 3, table_fmt)
+            
+            head_fmt = QtGui.QTextCharFormat()
+            head_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
+            head_fmt.setBackground(QBrush(QColor("#e0e0e0")))
+            
+            for col, text in enumerate([_("Código"), _("Frecuencia y Cobertura"), _("Codificador(es)")]):
+                cell_cursor = table.cellAt(0, col).firstCursorPosition()
+                cell_cursor.insertText(text, head_fmt)
+            
+            row = 1
+            for c_name, stats in sorted(code_stats.items()):
+                cell_cursor = table.cellAt(row, 0).firstCursorPosition()
+                c_fmt = QtGui.QTextCharFormat()
+                c_fmt.setBackground(QBrush(QColor(stats['color'])))
+                fg_color = TextColor(stats['color']).recommendation
+                c_fmt.setForeground(QBrush(QColor(fg_color)))
+                cell_cursor.insertText(c_name, c_fmt)
+                
+                cell_cursor = table.cellAt(row, 1).firstCursorPosition()
+                perc = (stats['len'] / total_chars) * 100
+                cell_cursor.insertText(f"Freq: {stats['freq']} ({perc:.1f}%)")
+                
+                cell_cursor = table.cellAt(row, 2).firstCursorPosition()
+                cell_cursor.insertText(", ".join(stats['owners']))
+                
+                row += 1
+                
+            # 3. Lista de segmentos debajo de la tabla
+            cursor.setPosition(table.lastPosition())
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.NextBlock)
+            cursor.insertText("\n\n" + _("Lista de Segmentos Codificados:") + "\n\n", title_fmt)
+            
+            norm_fmt = QtGui.QTextCharFormat()
+            it_fmt = QtGui.QTextCharFormat()
+            it_fmt.setFontItalic(True)
+            
+            for seg in segments_list:
+                # Nombre del código resaltado con su color
+                c_fmt = QtGui.QTextCharFormat()
+                c_fmt.setBackground(QBrush(QColor(seg['color'])))
+                fg_color = TextColor(seg['color']).recommendation
+                c_fmt.setForeground(QBrush(QColor(fg_color)))
+                cursor.insertText(f"[{seg['name']}] ", c_fmt)
+                
+                # Segmento en cursiva
+                clean_seg = str(seg['segment']).replace('\n', ' ').replace('\u2028', ' ')
+                cursor.insertText(f'"{clean_seg}"', it_fmt)
+                
+                # Memo del segmento (si existe)
+                if seg['memo']:
+                    cursor.insertText(f" - Memo: {seg['memo']}\n\n", norm_fmt)
+                else:
+                    cursor.insertText("\n\n", norm_fmt)
+                    
+            cursor.insertText("---\n\n", norm_fmt)
+
         tw = QtGui.QTextDocumentWriter()
         tw.setFileName(filepath)
-        tw.setFormat(b'ODF')  # byte array needed for Windows 10
-        tw.write(self.ui.plainTextEdit.document())
-        msg = _("Coded text file exported: ") + filepath
+        tw.setFormat(b'ODF')
+        tw.write(temp_doc)
+        
+        if item_selected == opt_textual:
+            try:
+                import zipfile
+                import re
+                import datetime
+                
+                with open(filepath, 'rb') as f:
+                    zin = zipfile.ZipFile(f)
+                    zip_data = {item.filename: zin.read(item.filename) for item in zin.infolist()}
+                
+                if 'content.xml' in zip_data:
+                    content = zip_data['content.xml'].decode('utf-8')
+                    d_str = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                    
+                    def repl_start(match):
+                        c_id = match.group(1)
+                        code_name = match.group(2)
+                        code_name_clean = re.sub(r'<[^>]+>', '', code_name)
+                        # CORRECCIÓN IMPORTANTE: Se añadió el namespace xmlns:dc="[http://purl.org/dc/elements/1.1/](http://purl.org/dc/elements/1.1/)" para evitar error en Word
+                        return f'<office:annotation office:name="QC_CMT_{c_id}" xmlns:dc="[http://purl.org/dc/elements/1.1/](http://purl.org/dc/elements/1.1/)"><dc:creator>QualCoder</dc:creator><dc:date>{d_str}</dc:date><text:p>Código: {code_name_clean}</text:p></office:annotation>'
+                    
+                    def repl_end(match):
+                        c_id = match.group(1)
+                        return f'<office:annotation-end office:name="QC_CMT_{c_id}"/>'
+                    
+                    new_content = re.sub(r'@@QC_CMT_START_(\d+)_(.*?)@@', repl_start, content, flags=re.DOTALL)
+                    new_content = re.sub(r'@@QC_CMT_END_(\d+)@@', repl_end, new_content)
+                    
+                    zip_data['content.xml'] = new_content.encode('utf-8')
+                    
+                    with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zout:
+                        for fname, fdata in zip_data.items():
+                            zout.writestr(fname, fdata)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error post-procesando comentarios ODT: {str(e)}")
+        
+        msg = _("Coded text exported to ") + filepath
+        # Import Message at top of file if not present, usually it is: from .helpers import Message
+        try:
+            Message(self.app, _("Coded text exported"), msg, "information").exec()
+        except NameError:
+            pass # Si la clase Message no está importada directamente
         self.parent_textEdit.append(msg)
-        Message(self.app, _('Coded text file exported'), msg, "information").exec()
 
     def export_html_file(self):
-        """ Export text to html file.
-        Called by export_option_selected.
-        """
-
-        if len(self.ui.plainTextEdit.document().toPlainText()) == 0:
+        """ Export file to an interactive html file with hover tooltips and side panel. """
+        if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "":
             return
+            
+        filename = self.file_['name'] + ".html"
+        options = QtWidgets.QFileDialog.Option.DontResolveSymlinks
+        
+        home_dir = os.getenv('HOME')
+        if not home_dir:
+            home_dir = os.path.expanduser('~')
+        last_dir = self.app.settings.get('directory', home_dir)
+            
+        filepath, file_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            _("Guardar exportación HTML"),
+            os.path.join(last_dir, filename),
+            _("HTML files (*.html)"),
+            options=options
+        )
+        
+        if not filepath:
+            return
+            
+        if not filepath.endswith('.html'):
+            filepath += '.html'
+            
+        self.app.settings['directory'] = os.path.dirname(filepath)
+
+        # GENERACIÓN DEL HTML INTERACTIVO Y FRAGMENTACIÓN DE TEXTO
+        import html as html_lib
+        
         plain_text = self.ui.plainTextEdit.document().toPlainText()
-        # Prepare code text with name and ordering
-        code_text2 = deepcopy(self.code_text)
-        code_ids_used = []
-        for ct in code_text2:
-            for c in self.codes:
-                if ct['cid'] == c['cid']:
-                    ct['codename'] = html.escape(c['name'])
-                    code_ids_used.append(c['cid'])
-                    break
-        code_ids_used = list(set(code_ids_used))
-
-        # Prepare html text
-        html_text = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN" "http://www.w3.org/TR/REC-html40/strict.dtd">\
-        <html><head><meta charset="utf-8" /></head>\
-        <body style=" font-family:"Noto Sans"; font-size:10pt; font-weight:400; font-style:normal;">'
-        for i, c in enumerate(plain_text):
-            if c == "\n":
-                c = "<br />\n"
+        current_fid = self.file_['id']
+        offset = self.file_['start']
+        codes_in_file = [c for c in self.code_text if c['fid'] == current_fid]
+        
+        # 1. Encontrar todos los límites de los códigos para evitar cruces (overlapping) de HTML
+        boundaries = set([0, len(plain_text)])
+        for c in codes_in_file:
+            p0 = max(0, int(c['pos0']) - offset)
+            p1 = min(len(plain_text), int(c['pos1']) - offset)
+            boundaries.add(p0)
+            boundaries.add(p1)
+            
+        boundaries = sorted(list(boundaries))
+        html_chunks = []
+        
+        # 2. Reconstruir el texto en pequeños fragmentos (chunks)
+        for i in range(len(boundaries) - 1):
+            b_start = boundaries[i]
+            b_end = boundaries[i+1]
+            chunk_text = plain_text[b_start:b_end]
+            if not chunk_text: 
+                continue
+                
+            safe_text = html_lib.escape(chunk_text).replace('\n', '<br>')
+            
+            # Revisar qué códigos cubren exactamente este fragmento
+            active_codes = []
+            for c in codes_in_file:
+                p0 = max(0, int(c['pos0']) - offset)
+                p1 = min(len(plain_text), int(c['pos1']) - offset)
+                if p0 <= b_start and p1 >= b_end:
+                    active_codes.append(c)
+                    
+            if not active_codes:
+                html_chunks.append(safe_text)
             else:
-                if c in entities.keys():
-                    c = entities[c]  # html.escape(c)
-            for ct in code_text2:
-                if ct['pos0'] == i:
-                    title = ct['codename']
-                    if ct['important'] == 1:
-                        title += "\nIMPORTANT"
-                    if ct['memo'] is not None and ct['memo'] != "":
-                        title += f"\nMEMO: {ct['memo']}"
-                    html_text += f'<span title="{title}" style="color:#000000; background-color:{ct["color"]};">'
-                if ct['pos1'] == i:
-                    html_text += "</span>"
-            html_text += c  # Some encoding issues, e.g. the Euro symbol
-        # Add Codes list
-        codes_directory = []
-        for cd in self.codes:
-            if cd['cid'] in code_ids_used:
-                category = None
-                for cat in self.categories:
-                    if cd['catid'] == cat['catid']:
-                        category = cat['name']
-                codes_directory.append([cd['name'], cd['color'], cd['memo'], category])
-        html_text += "<br /><br /><h2>Codes list</h2>\n"
-        for cd in codes_directory:
-            html_text += f'<p><span style="background-color:{cd[1]}">&nbsp;&nbsp;&nbsp;</span> &nbsp;<b>{cd[0]}</b>'
-            if cd[3] is not None:
-                html_text += f"&nbsp;CATEGORY: {cd[3]}"
-            if cd[2] != "":
-                html_text += f"&nbsp;&nbsp;CODE MEMO: {cd[2]}"
-            html_text += '</p>'
+                # 3. Dar formato visual y añadir datos para el Panel Lateral Interactvo
+                if len(active_codes) == 1:
+                    bg_color = active_codes[0]['color']
+                else:
+                    # Crear rayas diagonales si hay superposición de múltiples códigos
+                    colors = [c['color'] for c in active_codes]
+                    stripe_width = 100 / len(colors)
+                    gradient_parts = []
+                    for idx, col in enumerate(colors):
+                        gradient_parts.append(f"{col} {idx * stripe_width}%")
+                        gradient_parts.append(f"{col} {(idx+1) * stripe_width}%")
+                    bg_color = f"linear-gradient(45deg, {', '.join(gradient_parts)})"
+                
+                # Construir las tarjetas del Tooltip (Panel Lateral)
+                tooltip_html = ""
+                for c in active_codes:
+                    c_name = html_lib.escape(c['name'])
+                    memo_raw = c.get('memo')
+                    c_memo = html_lib.escape(str(memo_raw)).replace('\n', '<br>') if memo_raw else ""
+                    
+                    tooltip_html += f"<div class='info-card'>"
+                    tooltip_html += f"<b>Código: {c_name}</b>"
+                    if c_memo:
+                        tooltip_html += f"<hr><i>Memo: {c_memo}</i>"
+                    tooltip_html += f"</div>"
+                
+                bg_style = f"background: {bg_color};" if "gradient" in bg_color else f"background-color: {bg_color};"
+                
+                # Insertamos un span interactivo con data-tooltip para el JavaScript
+                span = f"<span class='coded-segment' style='{bg_style}' data-tooltip='{html_lib.escape(tooltip_html)}'>{safe_text}</span>"
+                html_chunks.append(span)
 
-        html_text += "\n</body></html>"
-        html_filename = self.file_['name'] + ".html"
-        exp_dir = ExportDirectoryPathDialog(self.app, html_filename)
-        filepath = exp_dir.filepath
-        if filepath is None:
-            return
-        with open(filepath, 'w') as html_file:
-            html_file.write(html_text)
-        msg = _("Coded text file exported to: ") + filepath
-        self.parent_textEdit.append(msg)
-        Message(self.app, _('Coded html file exported'), msg, "information").exec()
+        html_body = "".join(html_chunks)
+        
+        # 4. Ensamblar la plantilla del archivo HTML final (Estructura, CSS y Javascript)
+        final_html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Reporte Interactivo: {html_lib.escape(self.file_['name'])}</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; background-color: #f4f6f8; color: #333; }}
+        #document-container {{ width: 65%; padding: 40px; line-height: 1.8; font-size: 16px; background: white; box-shadow: 0 0 15px rgba(0,0,0,0.05); margin: 20px; border-radius: 8px; overflow-y: auto; height: calc(100vh - 40px); box-sizing: border-box; }}
+        #sidebar {{ width: 35%; padding: 30px; height: 100vh; position: sticky; top: 0; background-color: #2c3e50; color: white; overflow-y: auto; box-sizing: border-box; box-shadow: -5px 0 15px rgba(0,0,0,0.1); }}
+        .coded-segment {{ cursor: pointer; border-radius: 3px; padding: 2px 0; color: #000; text-shadow: 1px 1px 2px rgba(255,255,255,0.8); transition: all 0.2s ease; border: 1px solid transparent; }}
+        .coded-segment:hover {{ opacity: 0.9; border: 1px solid #34495e; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }}
+        h1 {{ font-size: 1.6em; border-bottom: 2px solid #3498db; padding-bottom: 15px; margin-top: 0; }}
+        h2 {{ color: #2c3e50; border-bottom: 1px solid #eee; padding-bottom: 10px; }}
+        .info-card {{ background: #34495e; padding: 15px; margin-bottom: 15px; border-radius: 6px; border-left: 5px solid #3498db; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }}
+        .info-card b {{ color: #f1c40f; font-size: 1.1em; display: block; }}
+        .info-card hr {{ border: 0; border-top: 1px solid #465c71; margin: 10px 0; }}
+        .default-msg {{ font-style: italic; color: #95a5a6; text-align: center; margin-top: 50px; line-height: 1.5; }}
+    </style>
+</head>
+<body>
+    <div id="document-container">
+        <h2>Documento: {html_lib.escape(self.file_['name'])}</h2>
+        {html_body}
+    </div>
+    <div id="sidebar">
+        <h1>Panel Analítico</h1>
+        <div id="panel-content">
+            <p class="default-msg">Pasa el cursor o haz clic sobre el texto resaltado a la izquierda para ver los detalles de los códigos y sus memos aplicados a ese segmento.</p>
+        </div>
+    </div>
+    
+    <script>
+        const segments = document.querySelectorAll('.coded-segment');
+        const panel = document.getElementById('panel-content');
+        
+        segments.forEach(seg => {{
+            seg.addEventListener('mouseenter', function() {{
+                panel.innerHTML = this.getAttribute('data-tooltip');
+            }});
+            seg.addEventListener('click', function() {{
+                panel.innerHTML = this.getAttribute('data-tooltip');
+                // Resaltar visualmente el segmento activo quitando el borde a los demás
+                segments.forEach(s => s.style.outline = 'none');
+                this.style.outline = '2px solid #e74c3c';
+            }});
+        }});
+    </script>
+</body>
+</html>"""
+
+        try:
+            with open(filepath, "w", encoding='utf-8') as f:
+                f.write(final_html)
+            msg = _("HTML file exported to: ") + filepath
+            self.parent_textEdit.append(msg)
+            try:
+                Message(self.app, _('HTML file exported'), msg, "information").exec()
+            except NameError:
+                pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(_("Export html file error: ") + str(e))
+            try:
+                Message(self.app, _("Export HTML file error"), str(e), "warning").exec()
+            except NameError:
+                pass
 
     def export_tagged_text(self):
         """ Export a text file with code tags.
@@ -2405,7 +2774,12 @@ class DialogCodeText(QtWidgets.QWidget):
         if len(self.ui.plainTextEdit.document().toPlainText()) == 0:
             return
         plain_text = self.ui.plainTextEdit.document().toPlainText()
+        
         # Prepare code text with name and ordering
+        try:
+            from copy import deepcopy
+        except ImportError:
+            pass
         code_text2 = deepcopy(self.code_text)
         code_ids_used = []
         for ct in code_text2:
@@ -2425,6 +2799,7 @@ class DialogCodeText(QtWidgets.QWidget):
                 if ct['pos1'] == i:
                     tagged_text += "}}" + ct['codename'] + "}}"
             tagged_text += c
+            
         # Add Codes list
         codes_list = []
         for cd in self.codes:
@@ -2443,16 +2818,49 @@ class DialogCodeText(QtWidgets.QWidget):
                 tagged_text += f" -- CODE MEMO: {cd[1]}"
             tagged_text += '\n'
 
+        # --- APLICACIÓN DE LA VENTANA DE GUARDADO NATIVA ---
         filename = self.file_['name'] + "_tagged.txt"
-        exp_dir = ExportDirectoryPathDialog(self.app, filename)
-        filepath = exp_dir.filepath
-        if filepath is None:
+        options = QtWidgets.QFileDialog.Option.DontResolveSymlinks
+        
+        home_dir = os.getenv('HOME')
+        if not home_dir:
+            home_dir = os.path.expanduser('~')
+        last_dir = self.app.settings.get('directory', home_dir)
+            
+        filepath, file_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            _("Guardar exportación TXT"),
+            os.path.join(last_dir, filename),
+            _("Text files (*.txt)"),
+            options=options
+        )
+        
+        if not filepath:
             return
-        with open(filepath, 'w') as text_file:
-            text_file.write(tagged_text)
-        msg = _("Coded text file exported to: ") + filepath
-        self.parent_textEdit.append(msg)
-        Message(self.app, _('Coded text file exported'), msg, "information").exec()
+            
+        if not filepath.endswith('.txt'):
+            filepath += '.txt'
+            
+        self.app.settings['directory'] = os.path.dirname(filepath)
+
+        # Escribir el archivo
+        try:
+            with open(filepath, "w", encoding='utf-8') as text_file:
+                text_file.write(tagged_text)
+            msg = _("Coded text file exported to: ") + filepath
+            self.parent_textEdit.append(msg)
+            try:
+                Message(self.app, _('Coded text file exported'), msg, "information").exec()
+            except NameError:
+                pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(_("Export text file error: ") + str(e))
+            try:
+                Message(self.app, _("Export text file error"), str(e), "warning").exec()
+            except NameError:
+                pass
 
     def eventFilter(self, object_, event):
         """ Using this event filter to identify treeWidgetItem drop events.
@@ -3627,9 +4035,18 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.plainTextEdit.setPlainText(self.text)
         # Prepare the side margin for the bars
         self.unlight()
-        self.ui.plainTextEdit.setViewportMargins(125, 0, 0, 0)
-        self.coding_margin.show()
-        self.coding_margin.raise_()
+
+        if self.show_margin_stripes:
+            self.ui.plainTextEdit.setViewportMargins(125, 0, 0, 0)
+            if hasattr(self, 'coding_margin'):
+                self.coding_margin.show()
+        else:
+            self.ui.plainTextEdit.setViewportMargins(0, 0, 0, 0)
+            if hasattr(self, 'coding_margin'):
+                self.coding_margin.hide()
+
+        if hasattr(self, 'coding_margin'):
+            self.coding_margin.raise_()
         self.coding_margin.update()        
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
@@ -3679,18 +4096,19 @@ class DialogCodeText(QtWidgets.QWidget):
         self.highlight()
 
     def unlight(self):
-        """ Quickly remove underlines. """
+        """ Quickly remove underlines and background highlights. """
         if self.ui.plainTextEdit.toPlainText() == "": return
         cursor = self.ui.plainTextEdit.textCursor()
         cursor.beginEditBlock()
         cursor.select(QtGui.QTextCursor.SelectionType.Document)
         fmt = QtGui.QTextCharFormat()
         fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
+        fmt.clearBackground()
         cursor.setCharFormat(fmt)
         cursor.endEditBlock()
 
     def highlight(self):
-        """ Optimized highlighting via dashed underlining. """
+        """ Optimized highlighting via dashed underlining and Marker option. """
         if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "": 
             if hasattr(self, 'coding_margin'): self.coding_margin.update()
             return
@@ -3706,9 +4124,17 @@ class DialogCodeText(QtWidgets.QWidget):
             if 0 <= start < end <= len(self.ui.plainTextEdit.toPlainText()):
                 cursor.setPosition(start)
                 cursor.setPosition(end, QtGui.QTextCursor.MoveMode.KeepAnchor)
+                
                 fmt = QtGui.QTextCharFormat()
-                fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.DashUnderline)
-                fmt.setUnderlineColor(QtGui.QColor(item['color']))
+                if self.highlight_style == 'underline':
+                    fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.DashUnderline)
+                    fmt.setUnderlineColor(QtGui.QColor(item['color']))
+                else:
+                    brush = QBrush(QColor(item['color']))
+                    fmt.setBackground(brush)
+                    foreground_color = TextColor(item['color']).recommendation
+                    fmt.setForeground(QBrush(QColor(foreground_color)))
+                    
                 cursor.mergeCharFormat(fmt)
         cursor.endEditBlock()
         self.ui.plainTextEdit.blockSignals(False)
