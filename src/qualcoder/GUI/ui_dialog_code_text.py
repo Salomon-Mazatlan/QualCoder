@@ -347,6 +347,16 @@ class Ui_Dialog_code_text(object):
         self.pushButton_important.setGeometry(QtCore.QRect(160, 0, 28, 28))
         self.pushButton_important.setText("")
         self.pushButton_important.setObjectName("pushButton_important")
+        # --- BOTONES DE PRUEBA VISUAL ---
+        self.pushButton_toggle_margin = QtWidgets.QPushButton(parent=self.groupBox_coding_buttons)
+        self.pushButton_toggle_margin.setGeometry(QtCore.QRect(240, 0, 70, 28))
+        self.pushButton_toggle_margin.setText("Margin")
+        self.pushButton_toggle_margin.setObjectName("pushButton_toggle_margin")
+        self.pushButton_toggle_highlight = QtWidgets.QPushButton(parent=self.groupBox_coding_buttons)
+        self.pushButton_toggle_highlight.setGeometry(QtCore.QRect(315, 0, 80, 28))
+        self.pushButton_toggle_highlight.setText("Highlight")
+        self.pushButton_toggle_highlight.setObjectName("pushButton_toggle_highlight")
+        # ----------------------------------------------------        
         self.label_code = QtWidgets.QLabel(parent=self.groupBox_coding_buttons)
         self.label_code.setGeometry(QtCore.QRect(200, 0, 28, 28))
         self.label_code.setText("")
