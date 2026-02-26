@@ -151,6 +151,7 @@ class DialogReportCodes(QtWidgets.QDialog):
         self.ui.textEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.ui.textEdit.customContextMenuRequested.connect(self.text_edit_menu)
         self.ui.pushButton_export_matrix.clicked.connect(self.export_matrix)
+        self.ui.pushButton_integrated_report.clicked.connect(self.export_integrated_report)
         self.ui.splitter.setSizes([100, 200, 0])
         try:
             s0 = int(self.app.settings['dialogreportcodes_splitter0'])
@@ -191,6 +192,281 @@ class DialogReportCodes(QtWidgets.QDialog):
         self.app.settings['dialogreportcodes_splitter_v0'] = max(sizes_vert[0], 10)
         self.app.settings['dialogreportcodes_splitter_v1'] = max(sizes_vert[1], 10)
         self.app.settings['dialogreportcodes_splitter_v2'] = max(sizes_vert[2], 10)
+
+    def export_integrated_report(self):
+        """ Abre el selector de opciones y exporta un documento ODT estructurado con tablas """
+        dialog = DialogReporteIntegrado(self)
+        if not dialog.exec():
+            return
+
+        selections = dialog.get_selections()
+
+        # Pedir la ruta para guardar el archivo
+        filepath, ok = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Guardar Reporte Integrado", 
+            self.app.settings['directory'],
+            "ODT Files(*.odt)"
+        )
+        
+        if not filepath or not ok:
+            return
+        if not filepath.endswith(".odt"):
+            filepath += ".odt"
+
+        # Crear un documento de texto temporal para armar el ODT
+        doc = QtGui.QTextDocument()
+        cursor = QtGui.QTextCursor(doc)
+        
+        # Formatos de texto
+        fmt_title = QtGui.QTextCharFormat()
+        fmt_title.setFontWeight(QtGui.QFont.Weight.Bold)
+        fmt_title.setFontPointSize(16)
+
+        fmt_h1 = QtGui.QTextCharFormat()
+        fmt_h1.setFontWeight(QtGui.QFont.Weight.Bold)
+        fmt_h1.setFontPointSize(12)
+        
+        fmt_bold = QtGui.QTextCharFormat()
+        fmt_bold.setFontWeight(QtGui.QFont.Weight.Bold)
+
+        fmt_italic = QtGui.QTextCharFormat()
+        fmt_italic.setFontItalic(True)
+        
+        fmt_normal = QtGui.QTextCharFormat()
+        fmt_normal.setFontWeight(QtGui.QFont.Weight.Normal)
+
+        # Formato de tabla base
+        table_format = QtGui.QTextTableFormat()
+        table_format.setBorder(1)
+        table_format.setCellPadding(4)
+        table_format.setCellSpacing(0)
+        table_format.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+
+        cursor.insertText("Reporte Integrado del Proyecto\n\n", fmt_title)
+
+        cur = self.app.conn.cursor()
+
+        # 1. Memo del proyecto
+        if selections["project_memo"]:
+            cursor.insertText("1. Memo del Proyecto\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            cur.execute("select memo from project")
+            res = cur.fetchone()
+            if res and res[0]:
+                cursor.insertText(res[0] + "\n\n")
+            else:
+                cursor.insertText("El proyecto no tiene memo.\n\n")
+
+        # 2 y 3. Segmentos codificados
+        if selections["segments_no_memo"] or selections["segments_memo"]:
+            cursor.insertText("2. Segmentos Codificados\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            
+            if not self.results:
+                cursor.insertText("No hay segmentos en los resultados actuales. Por favor, ejecuta una búsqueda antes de exportar.\n\n")
+            else:
+                for r in self.results:
+                    memo_segmento = r.get('coded_memo', '')
+                    memo_codigo = r.get('codename_memo', '')
+                    has_memo = bool(memo_segmento or memo_codigo)
+                    
+                    if has_memo and not selections["segments_memo"]:
+                        continue
+                    if not has_memo and not selections["segments_no_memo"]:
+                        continue
+
+                    # Identificar si pertenece a un Caso y/o Archivo
+                    if r.get('file_or_case') == 'Case':
+                        origen = f"Caso: {r.get('file_or_casename', '')} | Archivo: {r.get('filename', '')}"
+                    else:
+                        origen = f"Archivo: {r.get('file_or_casename', '')}"
+
+                    # Color del código
+                    fmt_code = QtGui.QTextCharFormat()
+                    fmt_code.setFontWeight(QtGui.QFont.Weight.Bold)
+                    if r.get('color'):
+                        fmt_code.setForeground(QtGui.QBrush(QtGui.QColor(r['color'])))
+
+                    cursor.insertText(f"Código: {r['codename']}", fmt_code)
+                    
+                    # Generar encabezado según el tipo de origen y coordenadas
+                    if r['result_type'] == 'text':
+                        pos_info = f" | Posición: {r.get('pos0','')}-{r.get('pos1','')}"
+                    elif r['result_type'] == 'image':
+                        pos_info = f" | Área: x:{r.get('x1','')} y:{r.get('y1','')} w:{r.get('width','')} h:{r.get('height','')}"
+                    elif r['result_type'] == 'av':
+                        pos_info = f" | Posición: {msecs_to_hours_mins_secs(r.get('pos0', 0))} - {msecs_to_hours_mins_secs(r.get('pos1', 0))}"
+                    else:
+                        pos_info = ""
+
+                    cursor.insertText(f" | {origen}{pos_info}\n", fmt_bold)
+                    
+                    # Insertar memos si la opción está activa
+                    if selections["segments_memo"]:
+                        if memo_codigo:
+                            cursor.insertText(f"Memo del código: {memo_codigo}\n", fmt_italic)
+                        if memo_segmento:
+                            cursor.insertText(f"Memo del segmento: {memo_segmento}\n", fmt_italic)
+                    
+                    # Insertar contenido según tipo (Texto, AV o Imagen)
+                    if r['result_type'] == 'text':
+                        cursor.insertText(f"{r.get('text', '')}\n\n", fmt_normal)
+                    elif r['result_type'] == 'av':
+                        cursor.insertText(f"[Audio/Video codificado: {r.get('mediapath')}]\n\n", fmt_normal)
+                    elif r['result_type'] == 'image':
+                        try:
+                            pdf_path = ""
+                            path_ = self.app.project_path + r['mediapath']
+                            if r['mediapath'][0:7] == "images:":
+                                path_ = r['mediapath'][7:]
+                            
+                            # Manejo de PDFs si la imagen viene de un documento PDF
+                            if r.get('pdf_page') is not None:
+                                if r['mediapath'][:6] == "/docs/":
+                                    pdf_path = f"{self.app.project_path}/documents/{r['mediapath'][6:]}"
+                                if r['mediapath'][:5] == "docs:":
+                                    pdf_path = r['mediapath'][5:]
+                                fitz_pdf = fitz.open(pdf_path)
+                                for page in fitz_pdf:
+                                    if page.number == r['pdf_page']:
+                                        import os
+                                        path_ = os.path.join(self.app.confighome, f"tmp_pdf_page.png")
+                                        pixmap = page.get_pixmap()
+                                        pixmap.save(path_)
+                                        break
+                                        
+                            image = QtGui.QImageReader(path_).read()
+                            if image.isNull():
+                                raise Exception("No se pudo cargar la imagen")
+                                
+                            image = image.copy(int(r['x1']), int(r['y1']), int(r['width']), int(r['height']))
+                            
+                            # Escalar imagen si es muy grande (máx 400px)
+                            scaler = 1.0
+                            if image.width() > 400 or image.height() > 400:
+                                scaler = min(400.0 / image.width(), 400.0 / image.height())
+                                
+                            imagename = f"{r.get('imid', 'img')}-{r['mediapath'].split('/')[-1]}"
+                            url = QtCore.QUrl(imagename)
+                            doc.addResource(QtGui.QTextDocument.ResourceType.ImageResource.value, url, image)
+                            
+                            image_format = QtGui.QTextImageFormat()
+                            image_format.setWidth(image.width() * scaler)
+                            image_format.setHeight(image.height() * scaler)
+                            image_format.setName(url.toString())
+                            
+                            cursor.insertImage(image_format)
+                            cursor.insertText("\n\n", fmt_normal)
+                        except Exception as e:
+                            cursor.insertText(f"[Imagen no disponible para exportación: {r.get('mediapath')}]\n\n", fmt_normal)
+
+        # 4. Tabla de Frecuencia de códigos
+        if selections["frequencies"]:
+            cursor.insertText("3. Frecuencia de Códigos (Todo el proyecto)\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            cur.execute("select code_name.name, count(code_text.cid) from code_text join code_name on code_text.cid=code_name.cid group by code_name.cid order by count(code_text.cid) desc")
+            res = cur.fetchall()
+            if res:
+                table = cursor.insertTable(len(res) + 1, 2, table_format)
+                table.cellAt(0, 0).firstCursorPosition().insertText("Código", fmt_bold)
+                table.cellAt(0, 1).firstCursorPosition().insertText("Citas", fmt_bold)
+                for i, row in enumerate(res):
+                    table.cellAt(i+1, 0).firstCursorPosition().insertText(str(row[0]), fmt_normal)
+                    table.cellAt(i+1, 1).firstCursorPosition().insertText(str(row[1]), fmt_normal)
+                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                cursor.insertText("\n\n", fmt_normal)
+            else:
+                cursor.insertText("No hay códigos aplicados en texto.\n\n")
+
+        # 5. Tabla de Co-ocurrencias
+        if selections["cooccurrences"]:
+            cursor.insertText("4. Co-ocurrencia de Códigos en Texto\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            sql = '''select c1.name, c2.name, count(*) 
+                     from code_text as t1
+                     join code_text as t2 on t1.fid = t2.fid and t1.cid != t2.cid 
+                     and ((t1.pos0 >= t2.pos0 and t1.pos0 <= t2.pos1) or (t1.pos1 >= t2.pos0 and t1.pos1 <= t2.pos1))
+                     join code_name as c1 on t1.cid = c1.cid
+                     join code_name as c2 on t2.cid = c2.cid
+                     where c1.cid < c2.cid
+                     group by c1.cid, c2.cid order by count(*) desc'''
+            cur.execute(sql)
+            res = cur.fetchall()
+            if res:
+                table = cursor.insertTable(len(res) + 1, 3, table_format)
+                table.cellAt(0, 0).firstCursorPosition().insertText("Código 1", fmt_bold)
+                table.cellAt(0, 1).firstCursorPosition().insertText("Código 2", fmt_bold)
+                table.cellAt(0, 2).firstCursorPosition().insertText("Frecuencia", fmt_bold)
+                for i, row in enumerate(res):
+                    table.cellAt(i+1, 0).firstCursorPosition().insertText(str(row[0]), fmt_normal)
+                    table.cellAt(i+1, 1).firstCursorPosition().insertText(str(row[1]), fmt_normal)
+                    table.cellAt(i+1, 2).firstCursorPosition().insertText(str(row[2]), fmt_normal)
+                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                cursor.insertText("\n\n", fmt_normal)
+            else:
+                cursor.insertText("No hay co-ocurrencias de códigos detectadas.\n\n")
+
+        # 6. Diarios (Journals)
+        if selections["journals"]:
+            cursor.insertText("5. Diarios (Journals)\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            cur.execute("select name, date, jentry from journal order by date desc")
+            res = cur.fetchall()
+            if res:
+                for row in res:
+                    cursor.insertText(f"Diario: {row[0]} | Fecha: {row[1]}\n", fmt_bold)
+                    cursor.insertText(f"{row[2]}\n\n", fmt_normal)
+            else:
+                cursor.insertText("No hay diarios registrados.\n\n")
+
+        # 7. Tabla de Atributos de Documentos
+        if selections["attributes"]:
+            cursor.insertText("6. Atributos de Documentos\n", fmt_h1)
+            cursor.setCharFormat(fmt_normal)
+            
+            # Obtener todos los nombres de atributos existentes
+            cur.execute("select name from attribute_type where caseOrFile='file' order by name")
+            attr_names = [row[0] for row in cur.fetchall()]
+            
+            # Obtener todos los archivos del sistema
+            cur.execute("select distinct id, name from source order by name")
+            files = cur.fetchall()
+            
+            if attr_names and files:
+                table = cursor.insertTable(len(files) + 1, len(attr_names) + 1, table_format)
+                
+                # Insertar encabezados (Archivo + Atributos)
+                table.cellAt(0, 0).firstCursorPosition().insertText("Archivo", fmt_bold)
+                for col_idx, attr_name in enumerate(attr_names):
+                    table.cellAt(0, col_idx + 1).firstCursorPosition().insertText(f"Atributo: {attr_name}", fmt_bold)
+                    
+                # Insertar los valores fila por fila, un archivo a la vez
+                for row_idx, file_data in enumerate(files):
+                    file_id, file_name = file_data
+                    table.cellAt(row_idx + 1, 0).firstCursorPosition().insertText(str(file_name), fmt_normal)
+                    
+                    # Rellenar cada columna según el atributo
+                    for col_idx, attr_name in enumerate(attr_names):
+                        cur.execute("select value from attribute where attr_type='file' and name=? and id=?", (attr_name, file_id))
+                        val = cur.fetchone()
+                        val_str = str(val[0]) if val else ""
+                        table.cellAt(row_idx + 1, col_idx + 1).firstCursorPosition().insertText(val_str, fmt_normal)
+                
+                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                cursor.insertText("\n\n", fmt_normal)
+            else:
+                cursor.insertText("No hay atributos de archivos configurados.\n\n")
+
+        # Exportar todo a archivo ODT
+        tw = QtGui.QTextDocumentWriter()
+        tw.setFileName(filepath)
+        tw.setFormat(b'ODF') 
+        tw.write(doc)
+        
+        msg = f"El reporte integrado se generó exitosamente en:\n{filepath}"
+        Message(self.app, "Reporte Exportado", msg, "information").exec()
+        self.parent_textEdit.append(msg)
 
     def get_files_and_cases(self, file_sort="name asc"):
         """ Get source files with additional details and fill files list widget.
@@ -3063,3 +3339,48 @@ class ToolTipEventFilter(QtCore.QObject):
                     receiver.setToolTip(_("Right click to view"))
         # Call Base Class Method to Continue Normal Event Processing
         return super(ToolTipEventFilter, self).eventFilter(receiver, event)
+class DialogReporteIntegrado(QtWidgets.QDialog):
+    """ Ventana emergente para seleccionar los elementos a incluir en el reporte integrado """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configuración de Reporte Integrado")
+        self.resize(350, 300)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        self.chk_project_memo = QtWidgets.QCheckBox("Memo del proyecto")
+        self.chk_segments_no_memo = QtWidgets.QCheckBox("Segmentos codificados sin memos")
+        self.chk_segments_memo = QtWidgets.QCheckBox("Segmentos codificados con memos")
+        self.chk_frequencies = QtWidgets.QCheckBox("Tabla de frecuencia de códigos")
+        self.chk_cooccurrences = QtWidgets.QCheckBox("Tabla de co-ocurrencias (Texto)")
+        self.chk_journals = QtWidgets.QCheckBox("Diarios (Journals)")
+        self.chk_attributes = QtWidgets.QCheckBox("Tabla de atributos de documentos")
+
+        # Marcar todos por defecto
+        self.checkboxes = [
+            self.chk_project_memo, self.chk_segments_no_memo, self.chk_segments_memo,
+            self.chk_frequencies, self.chk_cooccurrences, self.chk_journals, self.chk_attributes
+        ]
+        
+        for chk in self.checkboxes:
+            chk.setChecked(True)
+            layout.addWidget(chk)
+
+        # Botones de Aceptar y Cancelar
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_selections(self):
+        """ Retorna un diccionario con las selecciones del usuario """
+        return {
+            "project_memo": self.chk_project_memo.isChecked(),
+            "segments_no_memo": self.chk_segments_no_memo.isChecked(),
+            "segments_memo": self.chk_segments_memo.isChecked(),
+            "frequencies": self.chk_frequencies.isChecked(),
+            "cooccurrences": self.chk_cooccurrences.isChecked(),
+            "journals": self.chk_journals.isChecked(),
+            "attributes": self.chk_attributes.isChecked()
+        }
