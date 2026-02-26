@@ -130,7 +130,8 @@ class CodingMargin(QtWidgets.QWidget):
                 # The following lanes are subtracted (towards the left).
                 offset_x = margin_width - 15 - (col_index * 10) 
                 
-                color = QtGui.QColor(code['color'])
+                color_hex = code.get('color', '#cccccc')
+                color = QtGui.QColor(color_hex)
                 painter.setPen(QtCore.Qt.PenStyle.NoPen)
                 painter.setBrush(color)
                 
@@ -306,8 +307,18 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.pushButton_important.pressed.connect(self.show_important_coded)
         # --- Conectar los botones de la interfaz ---
         self.ui.pushButton_toggle_margin.setToolTip(_("Toggle code stripes margin"))
+        self.ui.pushButton_toggle_margin.setText("")
+        # Asignar color al ícono (ej. un tono azul)
+        self.ui.pushButton_toggle_margin.setIcon(qta.icon('mdi6.view-parallel-outline', color='#3498db'))
+        # Asignar color de fondo al botón (opcional, un azul muy clarito)
+        self.ui.pushButton_toggle_margin.setStyleSheet("background-color: #e8f4f8;")
         self.ui.pushButton_toggle_margin.pressed.connect(self.toggle_margin)
         self.ui.pushButton_toggle_highlight.setToolTip(_("Toggle highlight style (Underline/Marker)"))
+        self.ui.pushButton_toggle_highlight.setText("")
+        # Asignar color al ícono (ej. un tono naranja)
+        self.ui.pushButton_toggle_highlight.setIcon(qta.icon('mdi6.view-headline', color='#e67e22'))
+        # Asignar color de fondo al botón (opcional, un naranja muy clarito)
+        self.ui.pushButton_toggle_highlight.setStyleSheet("background-color: #fdf2e9;")
         self.ui.pushButton_toggle_highlight.pressed.connect(self.toggle_highlight_style)
         # ---------------------------------------------------------------
         # Right hand side splitter buttons
@@ -453,12 +464,21 @@ class DialogCodeText(QtWidgets.QWidget):
     def toggle_margin(self):
         """ Toggle the visibility of the left margin with code stripes """
         self.show_margin_stripes = not self.show_margin_stripes
+        
+        # Ocultar o mostrar el widget lateral
         if hasattr(self, 'coding_margin'):
             self.coding_margin.setVisible(self.show_margin_stripes)
+            
+        # Ajustar los márgenes del editor de texto
         if self.show_margin_stripes:
             self.ui.plainTextEdit.setViewportMargins(125, 0, 0, 0)
         else:
             self.ui.plainTextEdit.setViewportMargins(0, 0, 0, 0)
+            
+        # Forzar a que la pantalla se limpie y se redibuje
+        self.ui.plainTextEdit.viewport().update()
+        if hasattr(self, 'coding_margin'):
+            self.coding_margin.repaint()
 
     def toggle_highlight_style(self):
         """ Toggle between underline and marker highlighting """
@@ -4128,11 +4148,11 @@ class DialogCodeText(QtWidgets.QWidget):
                 fmt = QtGui.QTextCharFormat()
                 if self.highlight_style == 'underline':
                     fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.DashUnderline)
-                    fmt.setUnderlineColor(QtGui.QColor(item['color']))
+                    fmt.setUnderlineColor(QtGui.QColor(item.get('color', '#cccccc')))
                 else:
-                    brush = QBrush(QColor(item['color']))
+                    brush = QBrush(QColor(item.get('color', '#cccccc')))
                     fmt.setBackground(brush)
-                    foreground_color = TextColor(item['color']).recommendation
+                    foreground_color = TextColor(item.get('color', '#cccccc')).recommendation
                     fmt.setForeground(QBrush(QColor(foreground_color)))
                     
                 cursor.mergeCharFormat(fmt)
