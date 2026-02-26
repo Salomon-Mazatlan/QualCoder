@@ -63,6 +63,95 @@ ai_search_analysis_max_count = 10  # How many chunks of data are analysed in the
 path = os.path.abspath(os.path.dirname(__file__))
 logger = logging.getLogger(__name__)
 
+class CodingMargin(QtWidgets.QWidget):
+    """ Draw sidebars adjacent to the text and names on the far left. """
+    def __init__(self, editor, dialog_code_text):
+        super().__init__(editor)
+        self.editor = editor
+        self.dialog = dialog_code_text
+        self.setFixedWidth(120) 
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, event):
+        if not self.dialog.file_ or not self.dialog.code_text: 
+            return
+        painter = QtGui.QPainter(self)
+        font = QtGui.QFont(self.dialog.app.settings['font'], 7)
+        painter.setFont(font)
+        offset = self.editor.contentOffset()
+        block = self.editor.firstVisibleBlock()
+        
+        current_fid = self.dialog.file_['id']
+        
+        # Track Packing Algorithm
+        ctid_columns = {}
+        tracks = []
+        # Sort codes by start position
+        sorted_codes = sorted([c for c in self.dialog.code_text if c['fid'] == current_fid], key=lambda x: x['pos0'])
+        
+        for code in sorted_codes:
+            placed = False
+            for i, track_end in enumerate(tracks):
+                if track_end <= code['pos0']: # El carril está libre
+                    tracks[i] = code['pos1']
+                    ctid_columns[code['ctid']] = i
+                    placed = True
+                    break
+            if not placed:
+                tracks.append(code['pos1'])
+                ctid_columns[code['ctid']] = len(tracks) - 1
+
+        drawn_ctids = set()
+        
+        while block.isValid():
+            rect = self.editor.blockBoundingGeometry(block).translated(offset)
+            if rect.top() > self.height(): break
+            if rect.bottom() >= 0:
+                self.draw_code_bars(painter, block, rect, drawn_ctids, current_fid, ctid_columns)
+            block = block.next()
+
+    def draw_code_bars(self, painter, block, rect, drawn_ctids, current_fid, ctid_columns):
+        block_start = block.position() + self.dialog.file_['start']
+        block_end = block_start + block.length()
+        
+        # Counter to track the number of names on this line to avoid overlapping
+        names_drawn_here = 0 
+        margin_width = self.width()
+        
+        for code in self.dialog.code_text:
+            if code['fid'] != current_fid: continue
+            
+            if code['pos0'] < block_end and code['pos1'] > block_start:
+                # Get the optimized column
+                col_index = ctid_columns.get(code['ctid'], 0)
+                
+                # NEW: From right to left.
+                # Lane 0 is at "margin_width - 15" (adjacent to the text).
+                # The following lanes are subtracted (towards the left).
+                offset_x = margin_width - 15 - (col_index * 10) 
+                
+                color = QtGui.QColor(code['color'])
+                painter.setPen(QtCore.Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                
+                # Draw a 3px vertical bar
+                painter.drawRect(offset_x, int(rect.top()), 3, int(rect.height()))
+                
+                # Code name: only once per visible segment
+                if code['ctid'] not in drawn_ctids and code['pos0'] >= block_start:
+                    painter.setPen(color.darker(150))
+                    
+                    # Display 11 characters to avoid collision with the first bar.
+                    name = (code['name'][:11] + '..') if len(code['name']) > 11 else code['name']
+                    
+                    # Offset in Y (12 pixels) for each additional name sharing the line.
+                    y_pos = int(rect.top() + 10 + (names_drawn_here * 12))
+                    
+                    # NEW: Draw the text fixed at coordinate x = 5 (absolute far left).
+                    painter.drawText(5, y_pos, name)
+                    
+                    drawn_ctids.add(code['ctid'])
+                    names_drawn_here += 1  # Increment so the next one moves down.
 
 class DialogCodeText(QtWidgets.QWidget):
     """ Code management. Add, delete codes. Mark and unmark text.
@@ -305,7 +394,11 @@ class DialogCodeText(QtWidgets.QWidget):
             pass
         self.ui.splitter.splitterMoved.connect(self.update_sizes)
         self.ui.leftsplitter.splitterMoved.connect(self.update_sizes)
-
+        # Initialize side margin and infinite scroll
+        self.coding_margin = CodingMargin(self.ui.plainTextEdit, self)
+        self.ui.plainTextEdit.verticalScrollBar().valueChanged.connect(self.coding_margin.update)
+        self.ui.plainTextEdit.verticalScrollBar().valueChanged.connect(self.check_scroll_load)
+        self.ui.plainTextEdit.installEventFilter(self)
         # Add paragraph numbers widget
         self.number_bar = NumberBar(self.ui.plainTextEdit)
         layout = QtWidgets.QVBoxLayout(self.ui.lineNumbers)
@@ -1204,8 +1297,6 @@ class DialogCodeText(QtWidgets.QWidget):
             if cursor.position() + self.file_['start'] >= item['pos0'] and cursor.position() <= item['pos1']:
                 action_unmark = QtGui.QAction(_("Unmark (U)"))
                 action_code_memo = QtGui.QAction(_("Memo coded text (M)"))
-                action_start_pos = QtGui.QAction(_("Change start position (SHIFT LEFT/ALT RIGHT)"))
-                action_end_pos = QtGui.QAction(_("Change end position (SHIFT RIGHT/ALT LEFT)"))
                 # action_change_pos = QtGui.QAction(_("Change code position key presses"))
                 if item['important'] is None or item['important'] > 1:
                     action_important = QtGui.QAction(_("Add important mark (I)"))
@@ -1222,6 +1313,7 @@ class DialogCodeText(QtWidgets.QWidget):
                     submenu.addAction(item['name'])
             action_new_code = menu.addAction(_("Mark with new code (N)"))
             action_new_invivo_code = menu.addAction(_("in vivo code (V)"))
+            action_resize_code = menu.addAction(_("Readjust code"))
 
         if action_unmark:
             menu.addAction(action_unmark)
@@ -1233,10 +1325,6 @@ class DialogCodeText(QtWidgets.QWidget):
             menu.addAction(action_not_important)
         if action_change_pos:
             menu.addAction(action_change_pos)
-        if action_start_pos:
-            menu.addAction(action_start_pos)
-        if action_end_pos:
-            menu.addAction(action_end_pos)
         if action_change_code:
             menu.addAction(action_change_code)
         action_annotate = menu.addAction(_("Annotate (A)"))
@@ -1299,12 +1387,6 @@ class DialogCodeText(QtWidgets.QWidget):
         if action == action_code_memo:
             self.coded_text_memo(cursor.position())
             return
-        if action == action_start_pos:
-            self.change_code_start_or_end_position(cursor.position(), "start")
-            return
-        if action == action_end_pos:
-            self.change_code_start_or_end_position(cursor.position(), "end")
-            return
         if action == action_set_bookmark:
             cur = self.app.conn.cursor()
             bookmark_pos = cursor.position() + self.file_['start']
@@ -1326,6 +1408,11 @@ class DialogCodeText(QtWidgets.QWidget):
         if action == action_new_invivo_code:
             self.mark_with_new_code(in_vivo=True)
             return
+            
+        if action == action_resize_code:
+            self.resize_code_to_selection()
+            return
+            
         if action.property('submenu') == 'ai_text_analysis':
             if self.file_ is None:
                 Message(self.app, _('Warning'), _("No file was selected"), "warning").exec()
@@ -1345,64 +1432,66 @@ class DialogCodeText(QtWidgets.QWidget):
         # Remaining actions will be the submenu codes
         self.recursive_set_current_item(self.ui.treeWidget.invisibleRootItem(), action.text())
         self.mark()
-
-    def change_code_start_or_end_position(self, position, start_or_end):
-        """ Change start or end pos of code.
-        Args:
-            position: Integer - text cursor position
-            start_or_end: String - 'start' or 'end'
+    def resize_code_to_selection(self):
+        """ 
+        Opens a popup window (if necessary) and readjusts an existing code 
+        to the exact limits of the current text selection. 
         """
-
         if self.file_ is None:
             return
-        coded_list = []
-        for item in self.code_text:
-            if item['pos0'] <= position + self.file_['start'] <= item['pos1']:
-                coded_list.append(item)
-        if not coded_list:
-            return
-        code_ = []
-        if len(coded_list) == 1:
-            code_ = coded_list[0]
-        # Multiple codes at this position to select from
-        if len(coded_list) > 1:
-            ui = DialogSelectItems(self.app, coded_list, _("Select codes"), "single")
-            ok = ui.exec()
-            if not ok:
-                return
-            code_ = ui.get_selected()
-        if not code_:
+        cursor = self.ui.plainTextEdit.textCursor()
+        if not cursor.hasSelection():
             return
 
-        cur = self.app.conn.cursor()
-        length_sql = "select length(fulltext) from source where id=?"
-        cur.execute(length_sql, [self.file_['id']])
-        fulltext_length = cur.fetchone()[0]
-        title = f"Adjust code {start_or_end}"
-        adjustment, ok = QtWidgets.QInputDialog.getInt(self, title, code_['name'])
-        if not ok:
+        new_pos0 = cursor.selectionStart() + self.file_['start']
+        new_pos1 = cursor.selectionEnd() + self.file_['start']
+
+        # Find which codes overlap with this new selection (strict margin)
+        candidate_codes = []
+        for item in self.code_text:
+            if item['fid'] == self.file_['id']:
+                # Only show those that at least touch the selection
+                if item['pos0'] <= new_pos1 and item['pos1'] >= new_pos0:
+                    candidate_codes.append(item)
+
+        if not candidate_codes:
+            Message(self.app, _("Notice"), _("No overlapping codes with this selection to readjust. Make sure to select part of the code."), "warning").exec()
             return
-        if start_or_end == "start":
-            code_['pos0'] += adjustment
-            if code_['pos0'] < 0:
-                code_['pos0'] = 0
-            if code_['pos0'] >= code_['pos1']:
-                code_['pos0'] = code_['pos1'] - 1
-        if start_or_end == "end":
-            code_['pos1'] += adjustment
-            if code_['pos1'] <= code_['pos0']:
-                code_['pos1'] = code_['pos0'] + 1
-            if code_['pos1'] > fulltext_length:
-                code_['pos1'] = fulltext_length - 1
-        text_sql = "select substr(fulltext,?,?), length(fulltext) from source where id=?"
-        cur.execute(text_sql, [code_['pos0'], code_['pos1'], self.file_['id']])
-        seltext = cur.fetchone()[0]
+
+        code_to_update = None
+        if len(candidate_codes) == 1:
+            code_to_update = candidate_codes[0]
+        else:
+            # Reuse QualCoder's native list for the popup window
+            ui = DialogSelectItems(self.app, candidate_codes, _("Selecciona el código que deseas reajustar"), "single")
+            ok = ui.exec()
+            if not ok or not ui.get_selected():
+                return
+            code_to_update = ui.get_selected()
+
+        # Extract the new text from the database
+        cur = self.app.conn.cursor()
+        text_sql = "select substr(fulltext,?,?) from source where id=?"
+        cur.execute(text_sql, [new_pos0 + 1, new_pos1 - new_pos0, self.file_['id']])
+        res = cur.fetchone()
+        if not res: 
+            return
+        seltext = res[0]
+
+        # Update the database safely
         sql = "update code_text set pos0=?, pos1=?, seltext=? where ctid=?"
-        cur.execute(sql, [code_['pos0'], code_['pos1'], seltext, code_['ctid']])
-        self.app.conn.commit()
+        try:
+            cur.execute(sql, [new_pos0, new_pos1, seltext, code_to_update['ctid']])
+            self.app.conn.commit()
+        except sqlite3.IntegrityError:
+            self.app.conn.rollback()
+            Message(self.app, _("Duplicate Error"), _("his code already exists at this exact location."), "warning").exec()
+            return
+
+        # Update visualization
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
-
+        
     def mark_with_new_code(self, in_vivo=False):
         """ Create new code and mark selected text.
         Called through text_edit_menu or N key press - with selected text.
@@ -2372,13 +2461,12 @@ class DialogCodeText(QtWidgets.QWidget):
         https://stackoverflow.com/questions/28994494/why-does-qtreeview-not-fire-a-drop-or-move-event-during-drag-and-drop
 
         Also use it to detect key events in the textedit.
-        These are used to extend or shrink a text coding.
-        Only works if clicked on a code (text cursor is in the coded text).
-        Shrink start and end code positions using alt arrow left and alt arrow right
-        Extend start and end code positions using shift arrow left, shift arrow right
         Ctrl E Enter and exit Edit Mode
         """
-
+        # Synchronize the sidebar size with the editor
+        if object_ is self.ui.plainTextEdit and event.type() == QtCore.QEvent.Type.Resize:
+            if hasattr(self, 'coding_margin'):
+                self.coding_margin.setGeometry(0, 0, self.coding_margin.width(), self.ui.plainTextEdit.height())
         if object_ is self.ui.treeWidget.viewport():
             # If a show selected code was active, then clicking on a code in code tree, shows all codes and all tooltips
             if event.type() == QtCore.QEvent.Type.MouseButtonPress:
@@ -2389,149 +2477,22 @@ class DialogCodeText(QtWidgets.QWidget):
                 parent = self.ui.treeWidget.itemAt(event.position().toPoint())
                 self.item_moved_update_data(item, parent)
                 return True
-        # Change start and end code positions using alt arrow left and alt arrow right
-        # and shift arrow left, shift arrow right
 
         if type(event) == QtGui.QKeyEvent and object_ is self.ui.plainTextEdit:
             key = event.key()
             mod = event.modifiers()
             first_key_press = event.type() == QtCore.QEvent.Type.KeyPress and not event.isAutoRepeat()
-            # using timer for a lot of things
-            now = datetime.datetime.now()
-            diff = now - self.code_resize_timer
-            if diff.microseconds < 100000:
-                if mod in (QtCore.Qt.KeyboardModifier.AltModifier, QtCore.Qt.KeyboardModifier.ShiftModifier) \
-                        and key in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_Right):
-                    return True  # consume rapid shift + left clicks, etc. without changing selection
-                else:
-                    return False
+
             # Ctrl + E Edit mode - must be detected here as Ctrl E is overridden in editable textEdit
             if key == QtCore.Qt.Key.Key_E and mod == QtCore.Qt.KeyboardModifier.ControlModifier and first_key_press:
                 self.edit_mode_toggle()
                 return True
+                
             # Ignore all other key events if edit mode is active
             if self.edit_mode:
                 return False
-            cursor_pos = self.ui.plainTextEdit.textCursor().position()
-            codes_here = []
-            for item in self.code_text:
-                if item['pos0'] <= cursor_pos + self.file_['start'] <= item['pos1']:
-                    codes_here.append(item)
-            code_ = None
-            if len(codes_here) == 0:
-                return False
-            if len(codes_here) > 1 and mod in (
-                    QtCore.Qt.KeyboardModifier.AltModifier, QtCore.Qt.KeyboardModifier.ShiftModifier) \
-                    and key in (QtCore.Qt.Key.Key_Left, QtCore.Qt.Key.Key_Right):
-                ui = DialogSelectItems(self.app, codes_here, _("Select a code"), "single")
-                ok = ui.exec()
-                if not ok:
-                    return
-                code_ = ui.get_selected()
-                if not code_:
-                    return
-            if len(codes_here) == 1:
-                code_ = codes_here[0]
-            # Key event can be too sensitive, adjusted  for 150 millisecond gap
-            self.code_resize_timer = datetime.datetime.now()
-            if key == QtCore.Qt.Key.Key_Left and mod == QtCore.Qt.KeyboardModifier.AltModifier:
-                self.shrink_to_left(code_)
-                return True
-            if key == QtCore.Qt.Key.Key_Right and mod == QtCore.Qt.KeyboardModifier.AltModifier:
-                self.shrink_to_right(code_)
-                return True
-            if key == QtCore.Qt.Key.Key_Left and mod == QtCore.Qt.KeyboardModifier.ShiftModifier:
-                self.extend_left(code_)
-                return True
-            if key == QtCore.Qt.Key.Key_Right and mod == QtCore.Qt.KeyboardModifier.ShiftModifier:
-                self.extend_right(code_)
-                return True
+
         return False
-
-    def extend_left(self, code_):
-        """ Shift left arrow.
-        Args:
-            code_: code Dictionary
-        """
-
-        if not code_:
-            return
-        if code_['pos0'] < 1:
-            return
-        code_['pos0'] -= 1
-        cur = self.app.conn.cursor()
-        text_sql = "select substr(fulltext,?,?) from source where id=?"
-        cur.execute(text_sql, [code_['pos0'] + 1, code_['pos1'] - code_['pos0'], code_['fid']])
-        seltext = cur.fetchone()[0]
-        sql = "update code_text set pos0=?, seltext=? where ctid=?"
-        cur.execute(sql, (code_['pos0'], seltext, code_['ctid']))
-        self.app.conn.commit()
-        self.app.delete_backup = False
-        self.get_coded_text_update_eventfilter_tooltips()
-
-    def extend_right(self, code_):
-        """ Shift right arrow.
-        Args:
-            code_: code Dictionary
-        """
-
-        if not code_:
-            return
-        if code_['pos1'] + 1 >= len(self.ui.plainTextEdit.toPlainText()):
-            return
-        code_['pos1'] += 1
-        cur = self.app.conn.cursor()
-        text_sql = "select substr(fulltext,?,?) from source where id=?"
-        cur.execute(text_sql, [code_['pos0'] + 1, code_['pos1'] - code_['pos0'], code_['fid']])
-        seltext = cur.fetchone()[0]
-        sql = "update code_text set pos1=?, seltext=? where ctid=?"
-        cur.execute(sql,
-                    (code_['pos1'], seltext, code_['ctid']))
-        self.app.conn.commit()
-        self.app.delete_backup = False
-        self.get_coded_text_update_eventfilter_tooltips()
-
-    def shrink_to_left(self, code_):
-        """ Alt left arrow, shrinks code from the right end of the code.
-        Args:
-            code_: code Dictionary
-        """
-
-        if not code_:
-            return
-        if code_['pos1'] <= code_['pos0'] + 1:
-            return
-        code_['pos1'] -= 1
-        cur = self.app.conn.cursor()
-        text_sql = "select substr(fulltext,?,?) from source where id=?"
-        cur.execute(text_sql, [code_['pos0'] + 1, code_['pos1'] - code_['pos0'], code_['fid']])
-        seltext = cur.fetchone()[0]
-        sql = "update code_text set pos1=?, seltext=? where ctid=?"
-        cur.execute(sql, (code_['pos1'], seltext, code_['ctid']))
-        self.app.conn.commit()
-        self.app.delete_backup = False
-        self.get_coded_text_update_eventfilter_tooltips()
-
-    def shrink_to_right(self, code_):
-        """ Alt right arrow shrinks code from the left end of the code.
-        Args:
-            code_: code Dictionary
-        """
-
-        if not code_:
-            return
-        if code_['pos0'] >= code_['pos1'] - 1:
-            return
-        code_['pos0'] += 1
-        cur = self.app.conn.cursor()
-        text_sql = "select substr(fulltext,?,?) from source where id=?"
-        cur.execute(text_sql, [code_['pos0'] + 1, code_['pos1'] - code_['pos0'], code_['fid']])
-        seltext = cur.fetchone()[0]
-        sql = "update code_text set pos0=?, seltext=? where ctid=?"
-        cur.execute(sql, (code_['pos0'], seltext, code_['ctid']))
-        self.app.conn.commit()
-        self.app.delete_backup = False
-        self.get_coded_text_update_eventfilter_tooltips()
 
     def show_selected_code_in_text_next(self):
         """ Highlight only the selected code in the text. Move to next instance in text
@@ -2539,7 +2500,6 @@ class DialogCodeText(QtWidgets.QWidget):
         Adjust for a portion of text loaded.
         Called by: pushButton_show_codings_next
         """
-
         if self.file_ is None:
             return
         item = self.ui.treeWidget.currentItem()
@@ -2596,9 +2556,78 @@ class DialogCodeText(QtWidgets.QWidget):
         fmt.setForeground(QBrush(QColor(foreground_color)))
         cursor.mergeCharFormat(fmt)
         # Update tooltips to show only this code
-        self.eventFilterTT.set_codes_and_annotations(self.app, tt_code_text, self.codes, self.annotations,
-                                                     self.file_)
-        # Need to reload icons as they disappear on Windows
+        self.eventFilterTT.set_codes_and_annotations(self.app, tt_code_text, self.codes, self.annotations, self.file_)
+        self.ui.pushButton_show_all_codings.setIcon(qta.icon('mdi6.grid'))
+        self.ui.pushButton_show_codings_prev.setStyleSheet(f"background-color: {color}; color:{foreground_color}")
+        self.ui.pushButton_show_codings_prev.setIcon(qta.icon('mdi6.arrow-left'))
+        tt = _("Show previous coding of selected code") + msg
+        self.ui.pushButton_show_codings_prev.setToolTip(tt)
+        self.ui.pushButton_show_codings_next.setStyleSheet(f"background-color: {color}; color:{foreground_color}")
+        tt = _("Show next coding of selected code") + msg
+        self.ui.pushButton_show_codings_next.setToolTip(tt)
+        self.ui.pushButton_show_codings_next.setIcon(qta.icon('mdi6.arrow-right'))
+
+    def show_selected_code_in_text_previous(self):
+        """ Highlight only the selected code in the text. Move to previous instance in text
+        from the current textEdit cursor position.
+        Adjust for a portion of text loaded.
+        Called by: pushButton_show_codings_prev
+        """
+        if self.file_ is None:
+            return
+        item = self.ui.treeWidget.currentItem()
+        if item is None or item.text(1)[0:3] == 'cat':
+            return
+        cid = int(item.text(1)[4:])
+        indexes = []
+        tt_code_text = []
+        for ct in self.code_text:
+            if ct['cid'] == cid:
+                indexes.append(ct)
+                tt_code_text.append(ct)
+        indexes = sorted(indexes, key=itemgetter('pos0'), reverse=True)
+        cursor = self.ui.plainTextEdit.textCursor()
+        cur_pos = cursor.position()
+        end_pos = 0
+        found_smaller = False
+        msg = "/" + str(len(indexes))
+        for i, index in enumerate(indexes):
+            if index['pos1'] - self.file_['start'] < cur_pos:
+                cur_pos = index['pos0'] - self.file_['start']
+                end_pos = index['pos1'] - self.file_['start']
+                found_smaller = True
+                msg = str(len(indexes) - i) + msg
+                break
+        if not found_smaller and indexes == []:
+            return
+        # Loop around to the lowest index
+        if not found_smaller and indexes != []:
+            cur_pos = indexes[0]['pos0'] - self.file_['start']
+            end_pos = indexes[0]['pos1'] - self.file_['start']
+            msg = str(len(indexes)) + msg
+        if not found_smaller:
+            cursor = self.ui.plainTextEdit.textCursor()
+            cursor.setPosition(0)
+            self.ui.plainTextEdit.setTextCursor(cursor)
+        self.unlight()
+        msg = " " + _("Code:") + " " + msg
+        # Highlight the code in the text
+        color = ""
+        for c in self.codes:
+            if c['cid'] == cid:
+                color = c['color']
+        cursor.setPosition(cur_pos)
+        self.ui.plainTextEdit.setTextCursor(cursor)
+        cursor.setPosition(cur_pos, QtGui.QTextCursor.MoveMode.MoveAnchor)
+        cursor.setPosition(end_pos, QtGui.QTextCursor.MoveMode.KeepAnchor)
+        brush = QBrush(QColor(color))
+        fmt = QtGui.QTextCharFormat()
+        fmt.setBackground(brush)
+        foreground_color = TextColor(color).recommendation
+        fmt.setForeground(QBrush(QColor(foreground_color)))
+        cursor.mergeCharFormat(fmt)
+        # Update tooltips to show only this code
+        self.eventFilterTT.set_codes_and_annotations(self.app, tt_code_text, self.codes, self.annotations, self.file_)
         self.ui.pushButton_show_all_codings.setIcon(qta.icon('mdi6.grid'))
         self.ui.pushButton_show_codings_prev.setStyleSheet(f"background-color: {color}; color:{foreground_color}")
         self.ui.pushButton_show_codings_prev.setIcon(qta.icon('mdi6.arrow-left'))
@@ -3596,6 +3625,12 @@ class DialogCodeText(QtWidgets.QWidget):
             highlighter.highlighting_rules = []'''
 
         self.ui.plainTextEdit.setPlainText(self.text)
+        # Prepare the side margin for the bars
+        self.unlight()
+        self.ui.plainTextEdit.setViewportMargins(125, 0, 0, 0)
+        self.coding_margin.show()
+        self.coding_margin.raise_()
+        self.coding_margin.update()        
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
         self.show_all_codes_in_text()  # Deactivates the show_selected_code if this is active
@@ -3644,70 +3679,40 @@ class DialogCodeText(QtWidgets.QWidget):
         self.highlight()
 
     def unlight(self):
-        """ Remove all text highlighting from current file. """
-
-        if self.text is None or self.text == "":
-            return
+        """ Quickly remove underlines. """
+        if self.ui.plainTextEdit.toPlainText() == "": return
         cursor = self.ui.plainTextEdit.textCursor()
-        cursor.setPosition(0, QtGui.QTextCursor.MoveMode.MoveAnchor)
-        cursor.setPosition(len(self.text) - 1, QtGui.QTextCursor.MoveMode.KeepAnchor)
-        cursor.setCharFormat(QtGui.QTextCharFormat())
+        cursor.beginEditBlock()
+        cursor.select(QtGui.QTextCursor.SelectionType.Document)
+        fmt = QtGui.QTextCharFormat()
+        fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
+        cursor.setCharFormat(fmt)
+        cursor.endEditBlock()
 
     def highlight(self):
-        """ Apply text highlighting to current file.
-        If no colour has been assigned to a code, those coded text fragments are coloured gray.
-        Each code text item contains: fid, date, pos0, pos1, seltext, cid, status, memo,
-        name, owner.
-        For defined colours in color_selector, make text light on dark, and conversely dark on light
-        """
-
-        if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "":
+        """ Optimized highlighting via dashed underlining. """
+        if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "": 
+            if hasattr(self, 'coding_margin'): self.coding_margin.update()
             return
-        # Add coding highlights
-        codes = {x['cid']: x for x in self.codes}
+        self.ui.plainTextEdit.blockSignals(True)
+        self.unlight() 
+        cursor = self.ui.plainTextEdit.textCursor()
+        cursor.beginEditBlock()
+        current_fid = self.file_['id']
+        offset = self.file_['start']
         for item in self.code_text:
-            fmt = QtGui.QTextCharFormat()
-            cursor = self.ui.plainTextEdit.textCursor()
-            cursor.setPosition(int(item['pos0'] - self.file_['start']), QtGui.QTextCursor.MoveMode.MoveAnchor)
-            cursor.setPosition(int(item['pos1'] - self.file_['start']), QtGui.QTextCursor.MoveMode.KeepAnchor)
-            color = codes.get(item['cid'], {}).get('color', "#777777")  # default gray
-            brush = QBrush(QColor(color))
-            fmt.setBackground(brush)
-            # Foreground depends on the defined need_white_text color in color_selector
-            text_brush = QBrush(QColor(TextColor(color).recommendation))
-            fmt.setForeground(text_brush)
-            # Highlight codes with memos - these are italicised
-            # Italics also used for overlapping codes
-            if item['memo'] != "":
-                fmt.setFontItalic(True)
-            else:
-                fmt.setFontItalic(False)
-            # Bold important codes
-            if item['important']:
-                fmt.setFontWeight(QtGui.QFont.Weight.Bold)
-            # Use important flag for ONLY showing important codes (button selected)
-            if self.important and item['important'] == 1:
-                cursor.setCharFormat(fmt)
-            # Show all codes, as important button not selected
-            if not self.important:
-                cursor.setCharFormat(fmt)
-
-        # Add annotation marks - these are in bold, important codings are also bold
-        for note in self.annotations:
-            if len(self.file_.keys()) > 0:  # will be zero if using autocode and no file is loaded
-                # Cursor pos could be negative if annotation was for an earlier text portion
-                cursor = self.ui.plainTextEdit.textCursor()
-                if note['fid'] == self.file_['id'] and \
-                        0 <= int(note['pos0']) - self.file_['start'] < int(note['pos1']) - self.file_['start'] <= \
-                        len(self.ui.plainTextEdit.toPlainText()):
-                    cursor.setPosition(int(note['pos0']) - self.file_['start'],
-                                       QtGui.QTextCursor.MoveMode.MoveAnchor)
-                    cursor.setPosition(int(note['pos1']) - self.file_['start'],
-                                       QtGui.QTextCursor.MoveMode.KeepAnchor)
-                    format_bold = QtGui.QTextCharFormat()
-                    format_bold.setFontWeight(QtGui.QFont.Weight.Bold)
-                    cursor.mergeCharFormat(format_bold)
-        self.apply_underline_to_overlaps()
+            if item['fid'] != current_fid: continue
+            start, end = int(item['pos0']) - offset, int(item['pos1']) - offset
+            if 0 <= start < end <= len(self.ui.plainTextEdit.toPlainText()):
+                cursor.setPosition(start)
+                cursor.setPosition(end, QtGui.QTextCursor.MoveMode.KeepAnchor)
+                fmt = QtGui.QTextCharFormat()
+                fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.DashUnderline)
+                fmt.setUnderlineColor(QtGui.QColor(item['color']))
+                cursor.mergeCharFormat(fmt)
+        cursor.endEditBlock()
+        self.ui.plainTextEdit.blockSignals(False)
+        if hasattr(self, 'coding_margin'): self.coding_margin.update()
 
     def apply_underline_to_overlaps(self):
         """ Apply underline format to coded text sections which are overlapping.
@@ -5490,7 +5495,27 @@ class DialogCodeText(QtWidgets.QWidget):
                     best_doc = doc
 
         return best_doc
+    def check_scroll_load(self, value):
+        """ Load more text if the user nears the end of the scroll. """
+        if self.edit_mode or not self.file_: return
+        bar = self.ui.plainTextEdit.verticalScrollBar()
+        if value > bar.maximum() * 0.9 and self.file_['end'] < self.file_['characters']:
+            self.load_next_chunk_incremental()
 
+    def load_next_chunk_incremental(self):
+        """ Execute character loading from the DB transparently. """
+        chunk_size = self.app.settings['codetext_chunksize']
+        start_pos, length = self.file_['end'], chunk_size
+        cur = self.app.conn.cursor()
+        cur.execute("select substr(fulltext, ?, ?) from source where id=?", (start_pos + 1, length, self.file_['id']))
+        res = cur.fetchone()
+        if res:
+            self.ui.plainTextEdit.blockSignals(True)
+            self.ui.plainTextEdit.appendPlainText(res[0])
+            self.ui.plainTextEdit.blockSignals(False)
+            self.file_['end'] += len(res[0])
+            self.get_coded_text_update_eventfilter_tooltips()
+            self.coding_margin.update()
 
 class ToolTipEventFilter(QtCore.QObject):
     """ Used to add a dynamic tooltip for the textEdit.
