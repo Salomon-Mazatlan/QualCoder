@@ -236,7 +236,7 @@ class ViewCharts(QDialog):
     def fill_stopword_languages(self):
         """ Rellena la lista usando los nombres de idiomas de Settings.py """
         self.comboBox_stopword_lang.clear()
-        self.comboBox_stopword_lang.addItem(_("Default / No list"), None)
+        self.comboBox_stopword_lang.addItem(_("  "), None)
         
         # Usamos la lista de Settings.py para consistencia, descartando Svenska sv y Chinese zh como se sugirió
         languages = ["Deutsch de", "English en", "Español es", "Français fr", "Italiano it", "日本語 ja", "Português pt"]
