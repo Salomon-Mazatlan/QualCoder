@@ -204,7 +204,7 @@ class DialogReportCodes(QtWidgets.QDialog):
         # Pedir la ruta para guardar el archivo
         filepath, ok = QtWidgets.QFileDialog.getSaveFileName(
             self,
-            "Guardar Reporte Integrado", 
+            "Save Integrated Report", 
             self.app.settings['directory'],
             "ODT Files(*.odt)"
         )
@@ -243,28 +243,28 @@ class DialogReportCodes(QtWidgets.QDialog):
         table_format.setCellSpacing(0)
         table_format.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
 
-        cursor.insertText("Reporte Integrado del Proyecto\n\n", fmt_title)
+        cursor.insertText("Integrated Project Report\n\n", fmt_title)
 
         cur = self.app.conn.cursor()
 
         # 1. Memo del proyecto
         if selections["project_memo"]:
-            cursor.insertText("1. Memo del Proyecto\n", fmt_h1)
+            cursor.insertText("1. Project Memo\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             cur.execute("select memo from project")
             res = cur.fetchone()
             if res and res[0]:
                 cursor.insertText(res[0] + "\n\n")
             else:
-                cursor.insertText("El proyecto no tiene memo.\n\n")
+                cursor.insertText("The project has no memo.\n\n")
 
         # 2 y 3. Segmentos codificados
         if selections["segments_no_memo"] or selections["segments_memo"]:
-            cursor.insertText("2. Segmentos Codificados\n", fmt_h1)
+            cursor.insertText("2. Coded Segments\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             
             if not self.results:
-                cursor.insertText("No hay segmentos en los resultados actuales. Por favor, ejecuta una búsqueda antes de exportar.\n\n")
+                cursor.insertText("There are no segments in the current results. Please run a search before exporting.\n\n")
             else:
                 for r in self.results:
                     memo_segmento = r.get('coded_memo', '')
@@ -278,9 +278,9 @@ class DialogReportCodes(QtWidgets.QDialog):
 
                     # Identificar si pertenece a un Caso y/o Archivo
                     if r.get('file_or_case') == 'Case':
-                        origen = f"Caso: {r.get('file_or_casename', '')} | Archivo: {r.get('filename', '')}"
+                        origen = f"Case: {r.get('file_or_casename', '')} | File: {r.get('filename', '')}"
                     else:
-                        origen = f"Archivo: {r.get('file_or_casename', '')}"
+                        origen = f"File: {r.get('file_or_casename', '')}"
 
                     # Color del código
                     fmt_code = QtGui.QTextCharFormat()
@@ -288,7 +288,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                     if r.get('color'):
                         fmt_code.setForeground(QtGui.QBrush(QtGui.QColor(r['color'])))
 
-                    cursor.insertText(f"Código: {r['codename']}", fmt_code)
+                    cursor.insertText(f"Code: {r['codename']}", fmt_code)
                     
                     # Generar encabezado según el tipo de origen y coordenadas
                     if r['result_type'] == 'text':
@@ -305,9 +305,9 @@ class DialogReportCodes(QtWidgets.QDialog):
                     # Insertar memos si la opción está activa
                     if selections["segments_memo"]:
                         if memo_codigo:
-                            cursor.insertText(f"Memo del código: {memo_codigo}\n", fmt_italic)
+                            cursor.insertText(f"Code memo: {memo_codigo}\n", fmt_italic)
                         if memo_segmento:
-                            cursor.insertText(f"Memo del segmento: {memo_segmento}\n", fmt_italic)
+                            cursor.insertText(f"Segment memo: {memo_segmento}\n", fmt_italic)
                     
                     # Insertar contenido según tipo (Texto, AV o Imagen)
                     if r['result_type'] == 'text':
@@ -338,7 +338,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                                         
                             image = QtGui.QImageReader(path_).read()
                             if image.isNull():
-                                raise Exception("No se pudo cargar la imagen")
+                                raise Exception("The image could not be loaded")
                                 
                             image = image.copy(int(r['x1']), int(r['y1']), int(r['width']), int(r['height']))
                             
@@ -359,29 +359,29 @@ class DialogReportCodes(QtWidgets.QDialog):
                             cursor.insertImage(image_format)
                             cursor.insertText("\n\n", fmt_normal)
                         except Exception as e:
-                            cursor.insertText(f"[Imagen no disponible para exportación: {r.get('mediapath')}]\n\n", fmt_normal)
+                            cursor.insertText(f"[Image not available for export: {r.get('mediapath')}]\n\n", fmt_normal)
 
         # 4. Tabla de Frecuencia de códigos
         if selections["frequencies"]:
-            cursor.insertText("3. Frecuencia de Códigos (Todo el proyecto)\n", fmt_h1)
+            cursor.insertText("3. Code Frequency (Entire Project)\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             cur.execute("select code_name.name, count(code_text.cid) from code_text join code_name on code_text.cid=code_name.cid group by code_name.cid order by count(code_text.cid) desc")
             res = cur.fetchall()
             if res:
                 table = cursor.insertTable(len(res) + 1, 2, table_format)
-                table.cellAt(0, 0).firstCursorPosition().insertText("Código", fmt_bold)
-                table.cellAt(0, 1).firstCursorPosition().insertText("Citas", fmt_bold)
+                table.cellAt(0, 0).firstCursorPosition().insertText("Code", fmt_bold)
+                table.cellAt(0, 1).firstCursorPosition().insertText("Segments", fmt_bold)
                 for i, row in enumerate(res):
                     table.cellAt(i+1, 0).firstCursorPosition().insertText(str(row[0]), fmt_normal)
                     table.cellAt(i+1, 1).firstCursorPosition().insertText(str(row[1]), fmt_normal)
                 cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
                 cursor.insertText("\n\n", fmt_normal)
             else:
-                cursor.insertText("No hay códigos aplicados en texto.\n\n")
+                cursor.insertText("No codes applied to the text.\n\n")
 
         # 5. Tabla de Co-ocurrencias
         if selections["cooccurrences"]:
-            cursor.insertText("4. Co-ocurrencia de Códigos en Texto\n", fmt_h1)
+            cursor.insertText("4. Code Co-occurrence in Text\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             sql = '''select c1.name, c2.name, count(*) 
                      from code_text as t1
@@ -395,9 +395,9 @@ class DialogReportCodes(QtWidgets.QDialog):
             res = cur.fetchall()
             if res:
                 table = cursor.insertTable(len(res) + 1, 3, table_format)
-                table.cellAt(0, 0).firstCursorPosition().insertText("Código 1", fmt_bold)
-                table.cellAt(0, 1).firstCursorPosition().insertText("Código 2", fmt_bold)
-                table.cellAt(0, 2).firstCursorPosition().insertText("Frecuencia", fmt_bold)
+                table.cellAt(0, 0).firstCursorPosition().insertText("Code 1", fmt_bold)
+                table.cellAt(0, 1).firstCursorPosition().insertText("Code 2", fmt_bold)
+                table.cellAt(0, 2).firstCursorPosition().insertText("Co-occurrence", fmt_bold)
                 for i, row in enumerate(res):
                     table.cellAt(i+1, 0).firstCursorPosition().insertText(str(row[0]), fmt_normal)
                     table.cellAt(i+1, 1).firstCursorPosition().insertText(str(row[1]), fmt_normal)
@@ -405,24 +405,24 @@ class DialogReportCodes(QtWidgets.QDialog):
                 cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
                 cursor.insertText("\n\n", fmt_normal)
             else:
-                cursor.insertText("No hay co-ocurrencias de códigos detectadas.\n\n")
+                cursor.insertText("No code co-occurrences detected.\n\n")
 
         # 6. Diarios (Journals)
         if selections["journals"]:
-            cursor.insertText("5. Diarios (Journals)\n", fmt_h1)
+            cursor.insertText("5. Journals\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             cur.execute("select name, date, jentry from journal order by date desc")
             res = cur.fetchall()
             if res:
                 for row in res:
-                    cursor.insertText(f"Diario: {row[0]} | Fecha: {row[1]}\n", fmt_bold)
+                    cursor.insertText(f"Journals: {row[0]} | Fecha: {row[1]}\n", fmt_bold)
                     cursor.insertText(f"{row[2]}\n\n", fmt_normal)
             else:
-                cursor.insertText("No hay diarios registrados.\n\n")
+                cursor.insertText("No journals recorded.\n\n")
 
         # 7. Tabla de Atributos de Documentos
         if selections["attributes"]:
-            cursor.insertText("6. Atributos de Documentos\n", fmt_h1)
+            cursor.insertText("6. Document Attributes\n", fmt_h1)
             cursor.setCharFormat(fmt_normal)
             
             # Obtener todos los nombres de atributos existentes
@@ -437,9 +437,9 @@ class DialogReportCodes(QtWidgets.QDialog):
                 table = cursor.insertTable(len(files) + 1, len(attr_names) + 1, table_format)
                 
                 # Insertar encabezados (Archivo + Atributos)
-                table.cellAt(0, 0).firstCursorPosition().insertText("Archivo", fmt_bold)
+                table.cellAt(0, 0).firstCursorPosition().insertText("File", fmt_bold)
                 for col_idx, attr_name in enumerate(attr_names):
-                    table.cellAt(0, col_idx + 1).firstCursorPosition().insertText(f"Atributo: {attr_name}", fmt_bold)
+                    table.cellAt(0, col_idx + 1).firstCursorPosition().insertText(f"Attribute: {attr_name}", fmt_bold)
                     
                 # Insertar los valores fila por fila, un archivo a la vez
                 for row_idx, file_data in enumerate(files):
@@ -456,7 +456,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                 cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
                 cursor.insertText("\n\n", fmt_normal)
             else:
-                cursor.insertText("No hay atributos de archivos configurados.\n\n")
+                cursor.insertText("No file attributes configured.\n\n")
 
         # Exportar todo a archivo ODT
         tw = QtGui.QTextDocumentWriter()
@@ -464,8 +464,8 @@ class DialogReportCodes(QtWidgets.QDialog):
         tw.setFormat(b'ODF') 
         tw.write(doc)
         
-        msg = f"El reporte integrado se generó exitosamente en:\n{filepath}"
-        Message(self.app, "Reporte Exportado", msg, "information").exec()
+        msg = f"The integrated report was successfully generated at:\n{filepath}"
+        Message(self.app, "Report Exported", msg, "information").exec()
         self.parent_textEdit.append(msg)
 
     def get_files_and_cases(self, file_sort="name asc"):
@@ -3343,17 +3343,17 @@ class DialogReporteIntegrado(QtWidgets.QDialog):
     """ Ventana emergente para seleccionar los elementos a incluir en el reporte integrado """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Configuración de Reporte Integrado")
+        self.setWindowTitle("Integrated Report Settings")
         self.resize(350, 300)
         layout = QtWidgets.QVBoxLayout(self)
 
-        self.chk_project_memo = QtWidgets.QCheckBox("Memo del proyecto")
-        self.chk_segments_no_memo = QtWidgets.QCheckBox("Segmentos codificados sin memos")
-        self.chk_segments_memo = QtWidgets.QCheckBox("Segmentos codificados con memos")
-        self.chk_frequencies = QtWidgets.QCheckBox("Tabla de frecuencia de códigos")
-        self.chk_cooccurrences = QtWidgets.QCheckBox("Tabla de co-ocurrencias (Texto)")
-        self.chk_journals = QtWidgets.QCheckBox("Diarios (Journals)")
-        self.chk_attributes = QtWidgets.QCheckBox("Tabla de atributos de documentos")
+        self.chk_project_memo = QtWidgets.QCheckBox("Project Memo")
+        self.chk_segments_no_memo = QtWidgets.QCheckBox("Coded segments without memos")
+        self.chk_segments_memo = QtWidgets.QCheckBox("Coded segments with memos")
+        self.chk_frequencies = QtWidgets.QCheckBox("Code frequency table")
+        self.chk_cooccurrences = QtWidgets.QCheckBox("Co-occurrence table (Text)")
+        self.chk_journals = QtWidgets.QCheckBox("Journals")
+        self.chk_attributes = QtWidgets.QCheckBox("Document attributes table")
 
         # Marcar todos por defecto
         self.checkboxes = [
