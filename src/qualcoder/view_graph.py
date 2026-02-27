@@ -634,7 +634,7 @@ class ViewGraph(QDialog):
     # =======================================================================
 
     def import_codes_and_cooccurrences(self, x, y):
-        """ Importa un código, sus co-ocurrencias y genera reporte Lift/Jaccard """
+        """ Importa un código y sus co-ocurrencias sin duplicados (Solución str estricta) """
         if not self.codes:
             Message(self.app, _("Sin códigos"), _("No hay códigos en este proyecto.")).exec()
             return
@@ -645,33 +645,15 @@ class ViewGraph(QDialog):
             
         selected_codes = ui.get_selected()
         
-        reply = QtWidgets.QMessageBox.question(self, "Reporte Estadístico Analítico", 
-                                               "¿Desea generar un reporte metodológico de co-ocurrencias (Índices Lift y Jaccard)?\n\n(Aparecerá en una ventana al terminar)",
-                                               QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-                                               QtWidgets.QMessageBox.StandardButton.Yes)
-        generate_report = (reply == QtWidgets.QMessageBox.StandardButton.Yes)
-        
         import math
         cur = self.app.conn.cursor()
-
-        cur.execute("SELECT COUNT(ctid) FROM code_text")
-        res_n = cur.fetchone()
-        n_total = res_n[0] if res_n and res_n[0] > 0 else 1
-
-        full_report = "REPORTE ESTADÍSTICO DE CO-OCURRENCIAS\n" + ("=" * 80) + "\n"
-        full_report += "METODOLOGÍA Y FÓRMULAS:\n"
-        full_report += "1. Índice LIFT: (O_ab * N) / (O_a * O_b)\n"
-        full_report += "   > 1.0 : Atracción | = 1.0 : Independencia | < 1.0 : Repulsión\n"
-        full_report += "2. Coeficiente de JACCARD: O_ab / (O_a + O_b - O_ab)\n"
-        full_report += ("=" * 80) + "\n\n"
-        
-        has_cooc = False
 
         for idx, sc in enumerate(selected_codes):
             cx = x + (idx * 350)
             cy = y
             
-            main_node = next((item for item in self.scene.items() if isinstance(item, TextGraphicsItem) and item.code_or_cat.get('cid') == sc['cid']), None)
+            # CORRECCIÓN: str() para evitar error de int vs string y prevenir duplicados del Nodo Principal
+            main_node = next((item for item in self.scene.items() if type(item).__name__ == "TextGraphicsItem" and str(item.code_or_cat.get('cid')) == str(sc['cid'])), None)
             
             if not main_node:
                 code_data = {'name': sc['name'], 'supercatid': sc.get('supercatid'), 'catid': sc.get('catid'), 'cid': sc['cid'], 
@@ -680,10 +662,6 @@ class ViewGraph(QDialog):
                 self.scene.addItem(main_node)
             else:
                 cx, cy = main_node.pos().x(), main_node.pos().y()
-
-            cur.execute("SELECT COUNT(ctid) FROM code_text WHERE cid=?", [sc['cid']])
-            res_a = cur.fetchone()
-            count_a = res_a[0] if res_a and res_a[0] > 0 else 1
 
             sql = """
             SELECT c2.cid, n2.name, n2.color, COUNT(c2.cid) as overlap_count
@@ -699,72 +677,34 @@ class ViewGraph(QDialog):
             if res:
                 radius = max(120, len(res) * 20) 
                 angle_step = (2 * math.pi) / max(1, len(res))
-                
-                if generate_report:
-                    full_report += f"ANÁLISIS DEL CÓDIGO PRINCIPAL: [{sc['name']}] (Frecuencia O_a: {count_a})\n" 
-                    full_report += ("-" * 80) + "\n"
-                    has_cooc = True
 
                 for i, r in enumerate(res):
                     cooc_cid, cooc_name, cooc_color, overlap_count = r
                     
-                    if generate_report:
-                        cur.execute("SELECT COUNT(ctid) FROM code_text WHERE cid=?", [cooc_cid])
-                        res_b = cur.fetchone()
-                        count_b = res_b[0] if res_b and res_b[0] > 0 else 1
-                        
-                        lift = (overlap_count * n_total) / (count_a * count_b)
-                        denominator = (count_a + count_b - overlap_count)
-                        jaccard = (overlap_count / denominator) if denominator > 0 else 0.0
-                        
-                        full_report += f"  • {cooc_name}\n"
-                        full_report += f"      O_ab: {overlap_count} | O_b: {count_b} | LIFT: {lift:.2f} | JACCARD: {jaccard:.3f}\n\n"
+                    # CORRECCIÓN: str() para evitar duplicados en los Nodos Destino
+                    target_node = next((item for item in self.scene.items() if type(item).__name__ == "TextGraphicsItem" and str(item.code_or_cat.get('cid')) == str(cooc_cid)), None)
                     
-                    target_node = next((item for item in self.scene.items() if isinstance(item, TextGraphicsItem) and item.code_or_cat.get('cid') == cooc_cid), None)
                     if not target_node:
                         nx = cx + radius * math.cos(i * angle_step)
                         ny = cy + radius * math.sin(i * angle_step)
                         cooc_data = {'name': cooc_name, 'supercatid': None, 'catid': None, 'cid': cooc_cid, 
                                      'x': nx, 'y': ny, 'color': cooc_color, 'memo': "", 'child_names': []}
-                        target_node = TextGraphicsItem(self.app, cooc_data)
+                        target_node = TextGraphicsItem(self.app, code_data)
                         self.scene.addItem(target_node)
 
-                    line_exists = any(isinstance(link, LinkGraphicsItem) and 
+                    # Verificar que la LÍNEA no exista ya en ninguna de las dos direcciones
+                    line_exists = any(type(link).__name__ == "LinkGraphicsItem" and 
                                       ((link.from_widget == main_node and link.to_widget == target_node) or 
                                        (link.from_widget == target_node and link.to_widget == main_node)) 
                                       for link in self.scene.items())
+                                      
                     if not line_exists:
                         line_item = LinkGraphicsItem(main_node, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True)
                         self.scene.addItem(line_item)
                         
-        if generate_report and has_cooc:
-            dialog = QtWidgets.QDialog(self)
-            dialog.setWindowTitle("Reporte Estadístico Metodológico")
-            dialog.resize(700, 600)
-            layout = QtWidgets.QVBoxLayout(dialog)
-            
-            text_edit = QtWidgets.QTextEdit(dialog)
-            text_edit.setPlainText(full_report)
-            text_edit.setReadOnly(True)
-            font = QtGui.QFont("Courier")
-            font.setStyleHint(QtGui.QFont.StyleHint.TypeWriter)
-            text_edit.setFont(font)
-            
-            btn_save = QtWidgets.QPushButton("Guardar Reporte como .txt", dialog)
-            def save_to_txt():
-                filepath, _ = QtWidgets.QFileDialog.getSaveFileName(dialog, "Guardar Reporte", "", "Archivos de texto (*.txt)")
-                if filepath:
-                    if not filepath.endswith(".txt"): filepath += ".txt"
-                    try:
-                        with open(filepath, 'w', encoding='utf-8') as f:
-                            f.write(text_edit.toPlainText())
-                        QtWidgets.QMessageBox.information(dialog, "Éxito", "Reporte guardado correctamente.")
-                    except Exception as e:
-                        QtWidgets.QMessageBox.warning(dialog, "Error", f"Error al guardar:\n{e}")
-            btn_save.clicked.connect(save_to_txt)
-            layout.addWidget(text_edit)
-            layout.addWidget(btn_save)
-            dialog.exec()
+        self.scene.suggested_scene_size()
+        self.scene.update()
+
 
     def refresh_lines_visibility(self):
         """ Oculta líneas conectadas a nodos invisibles """
@@ -802,152 +742,318 @@ class ViewGraph(QDialog):
         return nodes, links, children, roots
 
     def organize_hierarchically(self):
-        """ Dibuja árbol Arriba-Abajo evitando empalmes """
-        nodes, links, children, roots = self._get_tree_structure()
+        """ Top-Down Tree Layout: Usa grafos no dirigidos para evitar errores por la dirección de las flechas. """
+        nodes = []
+        links = []
+        for item in self.scene.items():
+            if not item.isVisible(): continue
+            if isinstance(item, TextGraphicsItem) or isinstance(item, FreeTextGraphicsItem) or \
+               isinstance(item, CaseTextGraphicsItem) or isinstance(item, FileTextGraphicsItem) or \
+               isinstance(item, PixmapGraphicsItem) or isinstance(item, AVGraphicsItem):
+                nodes.append(item)
+            elif isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
+                links.append(item)
+
         if not nodes: return
+
+        # 1. Grafo no dirigido
+        adjacency = {n: set() for n in nodes}
+        for link in links:
+            if hasattr(link, 'from_widget') and hasattr(link, 'to_widget'):
+                u, v = link.from_widget, link.to_widget
+                if u in adjacency and v in adjacency:
+                    adjacency[u].add(v)
+                    adjacency[v].add(u)
+
+        # 2. Encontrar familias conectadas y sus raíces (el nodo con más conexiones)
+        visited_global = set()
+        components = []
+        for n in nodes:
+            if n not in visited_global:
+                comp_nodes = []
+                queue = [n]
+                visited_global.add(n)
+                while queue:
+                    curr = queue.pop(0)
+                    comp_nodes.append(curr)
+                    for neighbor in adjacency[curr]:
+                        if neighbor not in visited_global:
+                            visited_global.add(neighbor)
+                            queue.append(neighbor)
+                components.append(comp_nodes)
+
+        # 3. Construir árbol expansivo (BFS) para cada familia
+        tree_children = {n: [] for n in nodes}
+        roots = []
+        for comp in components:
+            root = max(comp, key=lambda x: len(adjacency[x]))
+            roots.append(root)
+            visited_tree = set([root])
+            queue = [root]
+            while queue:
+                curr = queue.pop(0)
+                for neighbor in adjacency[curr]:
+                    if neighbor not in visited_tree:
+                        visited_tree.add(neighbor)
+                        tree_children[curr].append(neighbor)
+                        queue.append(neighbor)
+
+        # 4. Asignar posiciones espaciales
         rect = self.scene.itemsBoundingRect()
         start_x = rect.center().x() - (len(nodes) * 20)
         start_y = rect.top() + 50
-        y_spacing = 90
-        visited = set()
-        
+        y_spacing = 100 # Salto vertical
+
         def set_pos(n, x, y):
             if hasattr(n, 'code_or_cat') and n.code_or_cat is not None:
                 n.code_or_cat['x'], n.code_or_cat['y'] = x, y
             n.setPos(x, y)
-            
+
         current_x = start_x
         def layout_node(node, depth):
             nonlocal current_x
-            if node in visited: return node.pos().x()
-            visited.add(node)
             node_w = node.boundingRect().width() if hasattr(node, 'boundingRect') else 100
-            
-            ch = children.get(node, [])
+
+            ch = tree_children.get(node, [])
             if not ch:
                 x = current_x
                 set_pos(node, x, start_y + (depth * y_spacing))
                 current_x += node_w + 30
                 return x
-                
+
             c_xs = [layout_node(c, depth + 1) for c in ch]
             parent_x = sum(c_xs) / len(c_xs) if c_xs else current_x
             if parent_x < current_x: parent_x = current_x
+
             set_pos(node, parent_x, start_y + (depth * y_spacing))
-            
+
             expected_right = parent_x + node_w + 30
             if current_x < expected_right: current_x = expected_right
             return parent_x
-            
-        for r in roots: layout_node(r, 0)
-        for n in nodes:
-            if n not in visited: layout_node(n, 0)
-                
-        for link in links: link.redraw()
+
+        for r in roots:
+            layout_node(r, 0)
+
+        for link in links:
+            if hasattr(link, 'redraw'): link.redraw()
+
         self.scene.suggested_scene_size()
         self.scene.update()
 
     def organize_horizontal(self, direction="LR"):
-        """ Dibuja árbol Izquierda-Derecha (LR) o Derecha-Izquierda (RL) """
-        nodes, links, children, roots = self._get_tree_structure()
+        """ Horizontal Tree Layout: Usa grafos no dirigidos. LR (Izquierda-Derecha) o RL (Derecha-Izquierda). """
+        nodes = []
+        links = []
+        for item in self.scene.items():
+            if not item.isVisible(): continue
+            if isinstance(item, TextGraphicsItem) or isinstance(item, FreeTextGraphicsItem) or \
+               isinstance(item, CaseTextGraphicsItem) or isinstance(item, FileTextGraphicsItem) or \
+               isinstance(item, PixmapGraphicsItem) or isinstance(item, AVGraphicsItem):
+                nodes.append(item)
+            elif isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
+                links.append(item)
+
         if not nodes: return
+
+        # 1. Grafo no dirigido
+        adjacency = {n: set() for n in nodes}
+        for link in links:
+            if hasattr(link, 'from_widget') and hasattr(link, 'to_widget'):
+                u, v = link.from_widget, link.to_widget
+                if u in adjacency and v in adjacency:
+                    adjacency[u].add(v)
+                    adjacency[v].add(u)
+
+        # 2. Encontrar familias conectadas y raíces
+        visited_global = set()
+        components = []
+        for n in nodes:
+            if n not in visited_global:
+                comp_nodes = []
+                queue = [n]
+                visited_global.add(n)
+                while queue:
+                    curr = queue.pop(0)
+                    comp_nodes.append(curr)
+                    for neighbor in adjacency[curr]:
+                        if neighbor not in visited_global:
+                            visited_global.add(neighbor)
+                            queue.append(neighbor)
+                components.append(comp_nodes)
+
+        # 3. Construir árbol BFS
+        tree_children = {n: [] for n in nodes}
+        roots = []
+        for comp in components:
+            root = max(comp, key=lambda x: len(adjacency[x]))
+            roots.append(root)
+            visited_tree = set([root])
+            queue = [root]
+            while queue:
+                curr = queue.pop(0)
+                for neighbor in adjacency[curr]:
+                    if neighbor not in visited_tree:
+                        visited_tree.add(neighbor)
+                        tree_children[curr].append(neighbor)
+                        queue.append(neighbor)
+
+        # 4. Asignar posiciones espaciales
         rect = self.scene.itemsBoundingRect()
         start_y = rect.center().y() - (len(nodes) * 20)
-        
+
         start_x = rect.left() + 50 if direction == "LR" else rect.right() - 50
         x_multiplier = 1 if direction == "LR" else -1
-        visited = set()
-        
+
         def set_pos(n, x, y):
             if hasattr(n, 'code_or_cat') and n.code_or_cat is not None:
                 n.code_or_cat['x'], n.code_or_cat['y'] = x, y
             n.setPos(x, y)
-            
+
         current_y = start_y
         def layout_node(node, depth):
             nonlocal current_y
-            if node in visited: return node.pos().y()
-            visited.add(node)
-            
             node_h = node.boundingRect().height() if hasattr(node, 'boundingRect') else 40
-            node_x = start_x + (depth * 250 * x_multiplier)
-            
-            ch = children.get(node, [])
+            node_x = start_x + (depth * 280 * x_multiplier)
+
+            ch = tree_children.get(node, [])
             if not ch:
                 y = current_y
                 set_pos(node, node_x, y)
                 current_y += node_h + 20
                 return y
-                
+
             c_ys = [layout_node(c, depth + 1) for c in ch]
             parent_y = sum(c_ys) / len(c_ys) if c_ys else current_y
             set_pos(node, node_x, parent_y)
-            
+
             expected_bottom = parent_y + node_h + 20
             if current_y < expected_bottom: current_y = expected_bottom
             return parent_y
-            
-        for r in roots: layout_node(r, 0)
-        for n in nodes:
-            if n not in visited: layout_node(n, 0)
-                
-        for link in links: link.redraw()
+
+        for r in roots:
+            layout_node(r, 0)
+
+        for link in links:
+            if hasattr(link, 'redraw'): link.redraw()
+
         self.scene.suggested_scene_size()
         self.scene.update()
 
     def organize_radially(self):
-        """ Dibuja modelo Radial calculando radios exactos por tamaño de texto """
-        import math
-        categories, codes, segments = [], [], []
+        """ Radial Tree Layout: Pone el nodo más conectado en el centro absoluto y abre sus conexiones en estrella. """
+        nodes = []
+        links = []
         for item in self.scene.items():
             if not item.isVisible(): continue
-            if isinstance(item, TextGraphicsItem):
-                if item.code_or_cat.get('cid') is None: categories.append(item)
-                else: codes.append(item)
-            elif isinstance(item, FreeTextGraphicsItem) or isinstance(item, CaseTextGraphicsItem) or \
-                 isinstance(item, FileTextGraphicsItem):
-                segments.append(item)
+            if isinstance(item, TextGraphicsItem) or isinstance(item, FreeTextGraphicsItem) or \
+               isinstance(item, CaseTextGraphicsItem) or isinstance(item, FileTextGraphicsItem) or \
+               isinstance(item, PixmapGraphicsItem) or isinstance(item, AVGraphicsItem):
+                nodes.append(item)
+            elif isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem):
+                links.append(item)
                 
-        if not (categories or codes or segments): return
-        codes.sort(key=lambda x: str(x.code_or_cat.get('catid', '')))
+        if not nodes: return
 
+        import math
         rect = self.scene.itemsBoundingRect()
         center_x, center_y = rect.center().x(), rect.center().y()
-        
-        def place_in_circle(nodes_list, radius, cx, cy):
-            if not nodes_list: return
-            if len(nodes_list) == 1 and radius <= 10:
-                nodes_list[0].setPos(cx, cy)
-                if hasattr(nodes_list[0], 'code_or_cat') and nodes_list[0].code_or_cat is not None:
-                    nodes_list[0].code_or_cat['x'], nodes_list[0].code_or_cat['y'] = cx, cy
-                return
-                
-            angle_step = (2 * math.pi) / len(nodes_list)
-            for i, node in enumerate(nodes_list):
-                angle = i * angle_step
-                new_x = cx + radius * math.cos(angle)
-                new_y = cy + radius * math.sin(angle)
-                n_w = node.boundingRect().width() / 2 if hasattr(node, 'boundingRect') else 0
-                n_h = node.boundingRect().height() / 2 if hasattr(node, 'boundingRect') else 0
-                if hasattr(node, 'code_or_cat') and node.code_or_cat is not None:
-                    node.code_or_cat['x'], node.code_or_cat['y'] = new_x - n_w, new_y - n_h
-                node.setPos(new_x - n_w, new_y - n_h)
 
-        def get_dynamic_radius(nodes_list, min_radius):
-            if not nodes_list: return min_radius
-            total_width_needed = sum([(n.boundingRect().width() if hasattr(n, 'boundingRect') else 100) + 30 for n in nodes_list])
-            return max(min_radius, total_width_needed / (2 * math.pi))
+        def set_pos(n, x, y):
+            w = n.boundingRect().width() / 2 if hasattr(n, 'boundingRect') else 0
+            h = n.boundingRect().height() / 2 if hasattr(n, 'boundingRect') else 0
+            nx, ny = x - w, y - h
+            if hasattr(n, 'code_or_cat') and n.code_or_cat is not None:
+                n.code_or_cat['x'], n.code_or_cat['y'] = nx, ny
+            n.setPos(nx, ny)
 
-        rad_cat = 0 if len(categories) <= 1 else get_dynamic_radius(categories, 80)
-        rad_codes = rad_cat + get_dynamic_radius(codes, 120) if codes else rad_cat
-        rad_segments = rad_codes + get_dynamic_radius(segments, 150) if segments else rad_codes
+        # 1. Construir grafo no dirigido para encontrar el centro real sin importar dirección de flechas
+        adjacency = {n: set() for n in nodes}
+        for link in links:
+            if hasattr(link, 'from_widget') and hasattr(link, 'to_widget'):
+                u, v = link.from_widget, link.to_widget
+                if u in adjacency and v in adjacency:
+                    adjacency[u].add(v)
+                    adjacency[v].add(u)
+                    
+        # 2. Encontrar el nodo más conectado (El centro absoluto o "Rey")
+        main_root = max(nodes, key=lambda n: len(adjacency[n]))
         
-        place_in_circle(categories, rad_cat, center_x, center_y)
-        place_in_circle(codes, rad_codes, center_x, center_y)
-        place_in_circle(segments, rad_segments, center_x, center_y)
+        # 3. Construir un árbol en abanico (BFS) desde el main_root
+        tree_children = {n: [] for n in nodes}
+        visited_tree = set([main_root])
+        queue = [main_root]
+        
+        while queue:
+            current = queue.pop(0)
+            for neighbor in adjacency[current]:
+                if neighbor not in visited_tree:
+                    visited_tree.add(neighbor)
+                    tree_children[current].append(neighbor)
+                    queue.append(neighbor)
+
+        # 4. Calcular "hojas" para distribuir el ángulo del círculo equitativamente
+        leaves_count = {}
+        def calc_leaves(node):
+            ch = tree_children.get(node, [])
+            if not ch:
+                leaves_count[node] = 1
+                return 1
+            count = sum(calc_leaves(c) for c in ch)
+            leaves_count[node] = count
+            return count
+
+        calc_leaves(main_root)
+
+        radius_step = 280 # Distancia entre anillos ampliada para que se vea limpio
+
+        # 5. Dibujar la estrella principal
+        drawn_nodes = set()
+        def layout_radial(node, depth, angle_start, angle_end):
+            drawn_nodes.add(node)
+            mid_angle = (angle_start + angle_end) / 2
             
-        for item in self.scene.items():
-            if isinstance(item, LinkGraphicsItem) or isinstance(item, FreeLineGraphicsItem): item.redraw()
+            if depth == 0:
+                set_pos(node, center_x, center_y)
+            else:
+                current_radius = max(200, depth * radius_step)
+                x = center_x + current_radius * math.cos(mid_angle)
+                y = center_y + current_radius * math.sin(mid_angle)
+                set_pos(node, x, y)
+
+            ch = tree_children.get(node, [])
+            if ch:
+                angle_per_leaf = (angle_end - angle_start) / leaves_count[node]
+                current_angle = angle_start
+                for child in ch:
+                    child_leaves = leaves_count[child]
+                    child_angle_end = current_angle + (child_leaves * angle_per_leaf)
+                    layout_radial(child, depth + 1, current_angle, child_angle_end)
+                    current_angle = child_angle_end
+
+        layout_radial(main_root, 0, 0, 2 * math.pi)
+
+        # 6. Acomodar nodos sueltos o sub-grafos desconectados en un anillo exterior
+        unvisited = [n for n in nodes if n not in drawn_nodes]
+        if unvisited:
+            max_depth = 0
+            def get_depth(node, d):
+                nonlocal max_depth
+                max_depth = max(max_depth, d)
+                for c in tree_children.get(node, []): get_depth(c, d + 1)
+            get_depth(main_root, 0)
+            
+            outer_radius = (max_depth + 1) * radius_step + 150
+            angle_step = (2 * math.pi) / len(unvisited)
+            for i, node in enumerate(unvisited):
+                angle = i * angle_step
+                x = center_x + outer_radius * math.cos(angle)
+                y = center_y + outer_radius * math.sin(angle)
+                set_pos(node, x, y)
+
+        # 7. Redibujar las líneas y refrescar vista
+        for link in links:
+            if hasattr(link, 'redraw'): link.redraw()
+            
         self.scene.suggested_scene_size()
         self.scene.update()
 
@@ -3596,9 +3702,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         self.code_or_cat = code_or_cat
         self.font_size = font_size
         self.bold = bold
-        # Propuesta: Bandera de estado visual. Permite al usuario alternar la morfología geométrica de los nodos 
-        # (rectángulos vs elipses) para estructurar mapas mentales semánticos más estéticos y flexibles.
-        self.is_ellipse = False 
+        self.is_ellipse = False # NUEVO: Controla si es elipse o cuadrado
+        self.is_collapsed = False # NUEVO: Controla si sus hijos están ocultos
         self.setPos(self.code_or_cat['x'], self.code_or_cat['y'])
         self.text = displayed_text
         if self.text == "":
@@ -3678,15 +3783,27 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             coded_action = menu.addAction('Coded text and media')
             case_action = menu.addAction('Case text and media')
             
+        hide_memo_action = None
         if self.code_or_cat['memo'] != "":
-            show_memo_action = menu.addAction(_("Display memo"))
+            if "\nMEMO:" in self.text:
+                hide_memo_action = menu.addAction("Ocultar memo")
+            else:
+                show_memo_action = menu.addAction(_("Display memo"))
         font_larger_action = menu.addAction(_("Larger font"))
         font_smaller_action = menu.addAction(_("Smaller font"))
         bold_action = menu.addAction(_("Bold toggle"))
         hide_action = menu.addAction('Hide')
         
-        # Propuesta: Acción para invocar el alternador de morfología geométrica del nodo.
+        # NUEVO: Acción para cambiar forma
         shape_action = menu.addAction('Alternar Forma (Elipse/Rect)')
+        
+        # NUEVO: Acción para colapsar/expandir (Solo aparece si tiene hijos)
+        collapse_action = None
+        if self.code_or_cat.get('child_names'):
+            if getattr(self, 'is_collapsed', False):
+                collapse_action = menu.addAction('Expandir descendientes')
+            else:
+                collapse_action = menu.addAction('Colapsar descendientes')
         
         action = menu.exec(QtGui.QCursor.pos())
         if action is None:
@@ -3696,6 +3813,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if action == shape_action:
             self.is_ellipse = not self.is_ellipse
             self.update() 
+        if collapse_action and action == collapse_action:
+            self.toggle_collapse()
         if action == add_text_segments_action:
             self.add_coded_text_segments()
         if action == add_cooc_action:
@@ -3703,6 +3822,9 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             
         if action == show_memo_action:
             self.text = f"{self.code_or_cat['name']}\nMEMO: {self.code_or_cat['memo']}"
+            self.setPlainText(self.text)
+        if action == hide_memo_action:
+            self.text = self.code_or_cat['name']
             self.setPlainText(self.text)
         if action == bold_action:
             self.bold = not self.bold
@@ -3790,14 +3912,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             self.scene().addItem(line_item)
 
     def add_cooccurring_codes(self):
-        """ 
-        # Propuesta: Visualizador avanzado de Redes de Co-ocurrencia (Estilo MAXQDA / Atlas.ti).
-        # Ejecuta un query analítico buscando superposiciones físicas (pos0 < pos1) 
-        # entre los rangos de codificación textual de la base SQLite.
-        # Despliega los nodos resultantes mediante un algoritmo de layout radial (circular) basado 
-        # en trigonometría para evitar la colisión visual, vinculándolos mediante aristas etiquetadas 
-        # que muestran cuantitativamente la frecuencia de la intersección geométrica.
-        """
+        """ Importa códigos co-ocurrentes desde un nodo específico sin duplicados """
         cur = self.app.conn.cursor()
         sql = """
         SELECT c2.cid, n2.name, n2.color, COUNT(c2.cid) as overlap_count
@@ -3823,14 +3938,14 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         selected = ui.get_selected()
         
         import math
-        radius = 250 # Tamaño de expansión del modelo estrella
+        radius = 250 
         angle_step = (2 * math.pi) / max(1, len(selected))
         
         for i, s in enumerate(selected):
-            target_node = next((item for item in self.scene().items() if isinstance(item, TextGraphicsItem) and item.code_or_cat['cid'] == s['cid']), None)
+            # CORRECCIÓN: Uso estricto de str()
+            target_node = next((item for item in self.scene().items() if type(item).__name__ == "TextGraphicsItem" and str(item.code_or_cat.get('cid')) == str(s['cid'])), None)
                     
             if not target_node:
-                # Disposición de Red Circular (Algoritmo de estrella)
                 angle = i * angle_step
                 cx = self.pos().x() + radius * math.cos(angle)
                 cy = self.pos().y() + radius * math.sin(angle)
@@ -3840,9 +3955,14 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
                 target_node = TextGraphicsItem(self.app, code_data)
                 self.scene().addItem(target_node)
                 
-            # Línea de color azul y estilo punteado (Sin texto de frecuencia)
-            line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True)
-            self.scene().addItem(line_item)
+            line_exists = any(type(link).__name__ == "LinkGraphicsItem" and 
+                              ((link.from_widget == self and link.to_widget == target_node) or 
+                               (link.from_widget == target_node and link.to_widget == self)) 
+                              for link in self.scene().items())
+                              
+            if not line_exists:
+                line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue", isvisible=True)
+                self.scene().addItem(line_item)
 
     def add_edit_memo(self):
         """ Add or edit memos for codes and categories. """
@@ -3862,6 +3982,30 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             cur.execute("update code_cat set memo=? where catid=?",
                         (self.code_or_cat['memo'], self.code_or_cat['catid']))
             self.conn.commit()
+    def toggle_collapse(self):
+        """ Oculta o muestra todos los nodos descendientes y actualiza las líneas """
+        self.is_collapsed = not getattr(self, 'is_collapsed', False)
+        
+        # 1. Ocultar/Mostrar nodos hijos en cascada
+        for item in self.scene().items():
+            if type(item).__name__ == "TextGraphicsItem" and item != self:
+                if item.code_or_cat['name'] in self.code_or_cat.get('child_names', []):
+                    if self.is_collapsed:
+                        item.hide()
+                    else:
+                        item.show()
+                        item.is_collapsed = False # Reinicia el estado de los hijos para evitar errores lógicos
+                        
+        # 2. Refrescar las líneas (Ocultar las que queden sueltas)
+        for item in self.scene().items():
+            if type(item).__name__ in ("LinkGraphicsItem", "FreeLineGraphicsItem"):
+                if hasattr(item, 'from_widget') and hasattr(item, 'to_widget'):
+                    if not item.from_widget.isVisible() or not item.to_widget.isVisible():
+                        item.hide()
+                    else:
+                        item.show()
+                        
+        self.scene().update()            
 
     def case_media(self, ):
         """ Display all coded text and media for this code.
