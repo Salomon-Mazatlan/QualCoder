@@ -392,6 +392,8 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.treeWidget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.ui.treeWidget.customContextMenuRequested.connect(self.tree_menu)
         self.ui.treeWidget.itemPressed.connect(self.fill_code_label_with_selected_code)
+        self.ui.comboBox_export.addItem("codebook")
+        self.ui.comboBox_export.currentIndexChanged.connect(self.export_option_selected)       
         self.ui.comboBox_export.currentIndexChanged.connect(self.export_option_selected)
         index = self.ui.comboBox_fontsize.findText(str(self.app.settings['docfontsize']),
                                                    QtCore.Qt.MatchFlag.MatchFixedString)
@@ -1509,16 +1511,20 @@ class DialogCodeText(QtWidgets.QWidget):
             Message(self.app, _("Notice"), _("No overlapping codes with this selection to readjust. Make sure to select part of the code."), "warning").exec()
             return
 
-        code_to_update = None
-        if len(candidate_codes) == 1:
-            code_to_update = candidate_codes[0]
-        else:
-            # Reuse QualCoder's native list for the popup window
-            ui = DialogSelectItems(self.app, candidate_codes, _("Selecciona el código que deseas reajustar"), "single")
-            ok = ui.exec()
-            if not ok or not ui.get_selected():
-                return
-            code_to_update = ui.get_selected()
+        if not candidate_codes:
+            Message(self.app, _("Notice"), _("No overlapping codes with this selection to readjust. Make sure to select part of the code."), "warning").exec()
+            return
+
+        # Siempre mostrar la ventana emergente para confirmar y evitar reajustes accidentales
+        ui = DialogSelectItems(self.app, candidate_codes, _("Select the code you want to adjust"), "single")
+        ok = ui.exec()
+        if not ok or not ui.get_selected():
+            return
+        code_to_update = ui.get_selected()
+
+        # Extract the new text from the database
+        cur = self.app.conn.cursor()
+        text_sql = "select substr(fulltext,?,?) from source where id=?"
 
         # Extract the new text from the database
         cur = self.app.conn.cursor()
@@ -2354,6 +2360,12 @@ class DialogCodeText(QtWidgets.QWidget):
             self.export_odt_file()
         if export_option == "txt":
             self.export_tagged_text()
+            
+        # --- NUEVO: Añadir la opción del codebook ---
+        if export_option == "codebook":
+            self.export_codebook()
+        # --------------------------------------------
+        
         self.ui.comboBox_export.setCurrentIndex(0)
 
     def export_odt_file(self):
@@ -2362,16 +2374,16 @@ class DialogCodeText(QtWidgets.QWidget):
         if self.file_ is None or self.ui.plainTextEdit.toPlainText() == "":
             return
             
-        opt_visual = _("Segmentos y códigos")
-        opt_textual = _("Lectura limpia (codigos como comentarios de segmentos)")
-        opt_analitica = _("Reporte Analítico: Matriz, Memos y segmentos codificados")
+        opt_visual = _("Highlighted coded segments")
+        opt_textual = _("Clean reading (codes as segment comments)")
+        opt_analitica = _("Analytical Report: Matrix, Memos, and coded segments")
         
         options_list = [opt_visual, opt_textual, opt_analitica]
         
         item_selected, ok = QtWidgets.QInputDialog.getItem(
             self, 
-            _("Opciones de Exportación ODT"),
-            _("Seleccione el enfoque del reporte analítico:"), 
+            _("ODT Export Options"),
+            _("Select the analytical report approach:"), 
             options_list, 
             0, 
             False
@@ -2389,7 +2401,7 @@ class DialogCodeText(QtWidgets.QWidget):
             
         filepath, file_filter = QtWidgets.QFileDialog.getSaveFileName(
             self,
-            _("Guardar exportación ODT"),
+            _("Save ODT export"),
             os.path.join(last_dir, filename),
             _("Open Document Text (*.odt)"),
             options=options
@@ -2467,7 +2479,7 @@ class DialogCodeText(QtWidgets.QWidget):
                     tag_fmt = QtGui.QTextCharFormat()
                     tag_fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.NoUnderline)
                     # Añadido el prefijo "Código:"
-                    tag_text = f" [Código: {item_code['name']}] "
+                    tag_text = f" [Code: {item_code['name']}] "
                     
                     cursor.movePosition(QtGui.QTextCursor.MoveOperation.EndOfBlock)
                     
@@ -2487,7 +2499,7 @@ class DialogCodeText(QtWidgets.QWidget):
             title_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
             
             # 1. Encabezado principal
-            cursor.insertText(_("Análisis de codificación") + "\n\n", title_fmt)
+            cursor.insertText(_("Coding analysis") + "\n\n", title_fmt)
             
             # 2. Construir la Tabla de Frecuencias
             total_chars = max(len(original_text), 1)
@@ -2512,7 +2524,7 @@ class DialogCodeText(QtWidgets.QWidget):
             head_fmt.setFontWeight(QtGui.QFont.Weight.Bold)
             head_fmt.setBackground(QBrush(QColor("#e0e0e0")))
             
-            for col, text in enumerate([_("Código"), _("Frecuencia y Cobertura"), _("Codificador(es)")]):
+            for col, text in enumerate([_("Code"), _("Frequency and Coverage"), _("Coder(s)")]):
                 cell_cursor = table.cellAt(0, col).firstCursorPosition()
                 cell_cursor.insertText(text, head_fmt)
             
@@ -2537,7 +2549,7 @@ class DialogCodeText(QtWidgets.QWidget):
             # 3. Lista de segmentos debajo de la tabla
             cursor.setPosition(table.lastPosition())
             cursor.movePosition(QtGui.QTextCursor.MoveOperation.NextBlock)
-            cursor.insertText("\n\n" + _("Lista de Segmentos Codificados:") + "\n\n", title_fmt)
+            cursor.insertText("\n\n" + _("List of Coded Segments:") + "\n\n", title_fmt)
             
             norm_fmt = QtGui.QTextCharFormat()
             it_fmt = QtGui.QTextCharFormat()
@@ -2587,7 +2599,7 @@ class DialogCodeText(QtWidgets.QWidget):
                         code_name = match.group(2)
                         code_name_clean = re.sub(r'<[^>]+>', '', code_name)
                         # CORRECCIÓN IMPORTANTE: Se añadió el namespace xmlns:dc="[http://purl.org/dc/elements/1.1/](http://purl.org/dc/elements/1.1/)" para evitar error en Word
-                        return f'<office:annotation office:name="QC_CMT_{c_id}" xmlns:dc="[http://purl.org/dc/elements/1.1/](http://purl.org/dc/elements/1.1/)"><dc:creator>QualCoder</dc:creator><dc:date>{d_str}</dc:date><text:p>Código: {code_name_clean}</text:p></office:annotation>'
+                        return f'<office:annotation office:name="QC_CMT_{c_id}" xmlns:dc="[http://purl.org/dc/elements/1.1/](http://purl.org/dc/elements/1.1/)"><dc:creator>QualCoder</dc:creator><dc:date>{d_str}</dc:date><text:p>Code: {code_name_clean}</text:p></office:annotation>'
                     
                     def repl_end(match):
                         c_id = match.group(1)
@@ -2604,7 +2616,7 @@ class DialogCodeText(QtWidgets.QWidget):
             except Exception as e:
                 import logging
                 logger = logging.getLogger(__name__)
-                logger.error(f"Error post-procesando comentarios ODT: {str(e)}")
+                logger.error(f"Error post-processing ODT comments: {str(e)}")
         
         msg = _("Coded text exported to ") + filepath
         # Import Message at top of file if not present, usually it is: from .helpers import Message
@@ -2704,7 +2716,7 @@ class DialogCodeText(QtWidgets.QWidget):
                     c_memo = html_lib.escape(str(memo_raw)).replace('\n', '<br>') if memo_raw else ""
                     
                     tooltip_html += f"<div class='info-card'>"
-                    tooltip_html += f"<b>Código: {c_name}</b>"
+                    tooltip_html += f"<b>Code: {c_name}</b>"
                     if c_memo:
                         tooltip_html += f"<hr><i>Memo: {c_memo}</i>"
                     tooltip_html += f"</div>"
@@ -2879,6 +2891,92 @@ class DialogCodeText(QtWidgets.QWidget):
             logger.error(_("Export text file error: ") + str(e))
             try:
                 Message(self.app, _("Export text file error"), str(e), "warning").exec()
+            except NameError:
+                pass
+    # --- NUEVA FUNCIÓN PARA EXPORTAR UN LIBRO DE CÓDIGOS ESPECIFICO DEL ARCHIVO CODIFICADO ---
+    def export_codebook(self):
+        """ Exporta un archivo de texto con el libro de códigos (codebook) 
+        que incluye ÚNICAMENTE los códigos utilizados en el archivo actual. """
+        
+        if self.file_ is None:
+            return
+
+        # 1. Obtener los IDs únicos de los códigos que están asignados en ESTE documento
+        cur = self.app.conn.cursor()
+        cur.execute("select distinct cid from code_text where fid=?", [self.file_['id']])
+        used_cids = [r[0] for r in cur.fetchall()]
+
+        if not used_cids:
+            Message(self.app, _("No codes"), _("This document has no assigned codes to export."), "information").exec()
+            return
+
+        # 2. Recopilar y formatear la información de cada código encontrado
+        lines = []
+        for cid in used_cids:
+            for code in self.codes:
+                if code['cid'] == cid:
+                    cat_path = ""
+                    if code['catid'] is not None:
+                        # Buscar el nombre de la categoría padre
+                        for cat in self.categories:
+                            if cat['catid'] == code['catid']:
+                                cat_path = cat['name'] + " >> "
+                                break
+                    
+                    # Limpiar el memo de saltos de línea para que quede en una sola fila en el TXT
+                    memo = str(code.get('memo', '')).replace('\n', ' ').strip()
+                    
+                    # Formato estricto solicitado: Categoria(+>>)nombre del código(+tabulador)memo
+                    line = f"{cat_path}{code['name']}\t{memo}"
+                    lines.append(line)
+                    break
+        
+        # Ordenar alfabéticamente para una lectura más ordenada
+        lines.sort()
+        text_content = "\n".join(lines)
+
+        # 3. Mostrar ventana de guardado
+        filename = self.file_['name'] + "_codebook.txt"
+        options = QtWidgets.QFileDialog.Option.DontResolveSymlinks
+        
+        home_dir = os.getenv('HOME')
+        if not home_dir:
+            home_dir = os.path.expanduser('~')
+        last_dir = self.app.settings.get('directory', home_dir)
+            
+        filepath, file_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            _("Save Codebook (TXT)"),
+            os.path.join(last_dir, filename),
+            _("Text files (*.txt)"),
+            options=options
+        )
+        
+        if not filepath:
+            return
+            
+        if not filepath.endswith('.txt'):
+            filepath += '.txt'
+            
+        self.app.settings['directory'] = os.path.dirname(filepath)
+
+        # 4. Escribir el archivo final
+        try:
+            with open(filepath, "w", encoding='utf-8') as text_file:
+                text_file.write(text_content)
+            
+            msg = _("Codebook exported to: ") + filepath
+            self.parent_textEdit.append(msg)
+            try:
+                Message(self.app, _('Codebook exported'), msg, "information").exec()
+            except NameError:
+                pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(_("Error exporting codebook: ") + str(e))
+            try:
+                Message(self.app, _("Error exporting codebook"), str(e), "warning").exec()
             except NameError:
                 pass
 
@@ -4099,8 +4197,18 @@ class DialogCodeText(QtWidgets.QWidget):
         cur.execute(sql, sql_values)
         code_results = cur.fetchall()
         keys = 'ctid', 'cid', 'fid', 'seltext', 'pos0', 'pos1', 'owner', 'date', 'memo', 'important', 'name'
+        
         for row in code_results:
-            self.code_text.append(dict(zip(keys, row)))
+            item = dict(zip(keys, row))
+            # NUEVO: Asignar el color aquí a TODOS los códigos, evitando el KeyError al exportar ODT/HTML
+            for c in self.codes:
+                if c['cid'] == item['cid']:
+                    item['color'] = c['color']
+                    break
+            if 'color' not in item:
+                item['color'] = '#cccccc'
+            self.code_text.append(item)
+
         # Update filter for tooltip and redo formatting
         if self.important:
             imp_coded = []
@@ -4139,6 +4247,10 @@ class DialogCodeText(QtWidgets.QWidget):
         current_fid = self.file_['id']
         offset = self.file_['start']
         for item in self.code_text:
+            # NUEVO: Ocultar el resaltado si el filtro de importantes está activo
+            if self.important and item.get('important') != 1:
+                continue
+                
             if item['fid'] != current_fid: continue
             start, end = int(item['pos0']) - offset, int(item['pos1']) - offset
             if 0 <= start < end <= len(self.ui.plainTextEdit.toPlainText()):
@@ -4156,6 +4268,8 @@ class DialogCodeText(QtWidgets.QWidget):
                     fmt.setForeground(QBrush(QColor(foreground_color)))
                     
                 cursor.mergeCharFormat(fmt)
+        # --- NUEVA LÍNEA: Aplicar la línea de solapamientos ---
+        self.apply_underline_to_overlaps()                
         cursor.endEditBlock()
         self.ui.plainTextEdit.blockSignals(False)
         if hasattr(self, 'coding_margin'): self.coding_margin.update()
@@ -4184,11 +4298,11 @@ class DialogCodeText(QtWidgets.QWidget):
         cursor = self.ui.plainTextEdit.textCursor()
         for o in overlaps:
             fmt = QtGui.QTextCharFormat()
-            fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.SingleUnderline)
-            if self.app.settings['stylesheet'] == 'dark':
-                fmt.setUnderlineColor(QColor("#000000"))
-            else:
-                fmt.setUnderlineColor(QColor("#FFFFFF"))
+            # Cambiamos a línea ondulada (WaveUnderline)
+            # --- NUEVO ESTILO: Línea continua blanca y gruesa ---
+            fmt.setUnderlineStyle(QtGui.QTextCharFormat.UnderlineStyle.SingleUnderline) # Línea continua
+            fmt.setUnderlineColor(QColor("white")) # Color blanco puro
+            # ----------------------------------------------------
             cursor.setPosition(o[0] - self.file_['start'], QtGui.QTextCursor.MoveMode.MoveAnchor)
             cursor.setPosition(o[1] - self.file_['start'], QtGui.QTextCursor.MoveMode.KeepAnchor)
             cursor.mergeCharFormat(fmt)
