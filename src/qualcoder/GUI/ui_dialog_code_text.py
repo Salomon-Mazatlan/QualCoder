@@ -474,6 +474,7 @@ class Ui_Dialog_code_text(object):
         self.comboBox_export.setItemText(1, _translate("Dialog_code_text", "html"))
         self.comboBox_export.setItemText(2, _translate("Dialog_code_text", "odt"))
         self.comboBox_export.setItemText(3, _translate("Dialog_code_text", "txt"))
+        self.comboBox_export.setItemText(4, _translate("Dialog_code_text", "codebook"))        
         self.pushButton_undo_edit.setToolTip(_translate("Dialog_code_text", "<html><head/><body><p>After editing the text:</p><p>Review edited text to confirm code positions are correct. Press button to Undo edited text, if code postions are incorrect. </p></body></html>"))
         self.pushButton_default_new_code_color.setToolTip(_translate("Dialog_code_text", "Set default colour for new codes"))
         self.comboBox_fontsize.setItemText(0, _translate("Dialog_code_text", "8"))
