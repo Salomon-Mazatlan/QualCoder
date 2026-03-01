@@ -24,7 +24,9 @@ from collections import Counter
 from copy import copy, deepcopy
 import logging
 import os
-import tempfile
+# --- Create a temporary file
+import tempfile 
+# ---
 import pandas as pd
 import plotly.express as px
 import qtawesome as qta  # see: https://pictogrammers.com/library/mdi/
@@ -171,25 +173,22 @@ class ViewCharts(QDialog):
         wordcloud_ngram_options = ["1", "2", "3", "4"]
         self.ui.comboBox_ngrams.addItems(wordcloud_ngram_options)
         self.ui.pushButton_stopwords.clicked.connect(self.set_stopwords_filepath)
-        
-        # =========================================================================
-        # SECCIÓN NUEVA: INTEGRACIÓN DE LISTA DESPLEGABLE INTERNA (A PRUEBA DE FALLOS)
-        # =========================================================================
-        
+
+        # --- NEW SECTION: INTERNAL DROPDOWN LIST INTEGRATION
         # 1. Referencia al botón original
         button = self.ui.pushButton_stopwords
         
-        # 2. Crear ComboBox
+        # 2. Create ComboBox
         self.comboBox_stopword_lang = QtWidgets.QComboBox(button.parentWidget())
         self.comboBox_stopword_lang.setToolTip(_("Select internal stopword list"))
-        self.comboBox_stopword_lang.setMinimumWidth(130) # Asegurar que tenga tamaño visible
+        self.comboBox_stopword_lang.setMinimumWidth(130) # Ensure it has a visible size
 
-        # 3. Buscador exhaustivo del layout para insertar el combo box
+        # 3. Exhaustive search of the layout to insert the combo box
         inserted = False
         for layout in self.findChildren(QtWidgets.QLayout):
             idx = layout.indexOf(button)
             if idx != -1:
-                # ¡Encontramos el layout del botón! Lo insertamos al lado.
+                # We found the button layout! We inserted it next to it.
                 if isinstance(layout, QtWidgets.QBoxLayout):
                     layout.insertWidget(idx + 1, self.comboBox_stopword_lang)
                     inserted = True
@@ -199,7 +198,7 @@ class ViewCharts(QDialog):
                     inserted = True
                 break
         
-        # PLAN B: Si la ventana fue diseñada sin layouts (coordenadas estáticas)
+        # PLAN B: If the window was designed without layouts (static coordinates)
         if not inserted:
             geom = button.geometry()
             # Posición = X del botón + Ancho del botón + 5 pixeles de margen
@@ -209,11 +208,9 @@ class ViewCharts(QDialog):
         self.comboBox_stopword_lang.show()
         self.comboBox_stopword_lang.raise_()
 
-        # 4. Cargar los idiomas detectados de manera estandarizada
+        # 4. Load the detected languages in a standardized manner
         self.fill_stopword_languages()
-        
-        # =========================================================================
-
+        # ---
         # QIntValidator does not use upper limits, it is based on number of digits entered. eg 999 possible
         self.ui.lineEdit_max_words.setValidator(QtGui.QIntValidator(50, 500))
         self.ui.lineEdit_max_words.setText("200")
@@ -231,63 +228,63 @@ class ViewCharts(QDialog):
         heatmap_combobox_list = ["", "File", "Case"]
         self.ui.comboBox_heatmap.addItems(heatmap_combobox_list)
         self.ui.comboBox_heatmap.currentIndexChanged.connect(self.make_heatmap)
-
-    # --- NUEVAS FUNCIONES PARA LISTA DE EXCLUSIÓN ---
+    # =========================================================================
+    # NEW FEATURES FOR THE EXCLUSION LIST
+    # =========================================================================
     def fill_stopword_languages(self):
-        """ Rellena la lista usando los nombres de idiomas de Settings.py """
+        """ Fill in the list using the language names from Settings.py """
         self.comboBox_stopword_lang.clear()
         self.comboBox_stopword_lang.addItem(_("  "), None)
         
-        # Usamos la lista de Settings.py para consistencia, descartando Svenska sv y Chinese zh como se sugirió
+        # We used the list from Settings.py for consistency, excluding Svenska (sv) and Chinese (zh).
         languages = ["Deutsch de", "English en", "Español es", "Français fr", "Italiano it", "日本語 ja", "Português pt"]
         
         for lang in languages:
-            # Extraer las últimas 2 letras como código identificador (ej: 'es' de 'Español es')
+            # Extract the last two letters as the identifier code (e.g., “es” from “Español es”).
             lang_code = lang[-2:]
             self.comboBox_stopword_lang.addItem(lang, lang_code)
 
     def get_selected_stopwords_path(self):
-        """ Determina de forma segura qué archivo enviar a la nube (Wordcloud). """
-        # 1. Si el usuario subió uno manualmente, tiene prioridad.
+        """ Securely determine which file to send to the Wordcloud """
+        # 1. If the user uploaded one manually, it takes priority
         if self.stopwords_filepath:
             return self.stopwords_filepath
         
-        # 2. Obtener el código de idioma (ej: 'es') del combo box interno
+        # 2. Retrieve the language code (e.g., “es”) from the internal combo box
         idx = self.comboBox_stopword_lang.currentIndex()
         lang_code = self.comboBox_stopword_lang.itemData(idx)
         
         if lang_code:
-            # OPCIÓN A: Intentar usar el módulo recomendado stopwords.py
+            # OPTION A: Attempt to use the stopwords.py module
             try:
                 from . import stopwords
                 words_string = getattr(stopwords, lang_code, None)
                 if words_string:
-                    # Guardamos las palabras en un archivo temporal seguro para que simple_wordcloud pueda abrirlo
+                    # The words are saved to a secure temporary file so that simple_wordcloud can open it.
                     temp_path = os.path.join(tempfile.gettempdir(), f"qc_stopwords_{lang_code}.txt")
                     with open(temp_path, 'w', encoding='utf-8') as f:
-                        # .split() separa las palabras y luego se unen por saltos de linea
                         f.write("\n".join(words_string.split()))
                     return temp_path
             except (ImportError, AttributeError):
                 pass  # El módulo no existe aún o no tiene ese idioma definido
                 
-            # OPCIÓN B: Intentar ubicar en la carpeta Examples con nomenclatura consistente (stopwords_es.txt)
+            # OPTION B: Attempt to locate it in the Examples folder using consistent naming (stopwords_es.txt)
             examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Examples")
             example_file = os.path.join(examples_dir, f"stopwords_{lang_code}.txt")
             if os.path.exists(example_file):
                 return example_file
 
-        # 3. SALVAVIDAS: Evitar el crash [Errno 2] de QualCoder usando un archivo temporal en el sistema
+        # 3. FALLBACK: Prevent the [Errno 2] crash in QualCoder by using a system temporary file
         fallback_file = os.path.join(tempfile.gettempdir(), "qc_vacio_seguridad.txt")
         if not os.path.exists(fallback_file):
             try:
                 with open(fallback_file, 'w', encoding='utf-8') as f:
                     f.write("") # Archivo vacío temporal inofensivo
             except Exception as e:
-                logger.error("No se pudo crear archivo de seguridad: " + str(e))
+                logger.error("Unable to create backup file: " + str(e))
                 
         return fallback_file
-    # ------------------------------------------------
+    # =========================================================================
 
     # DATA FILTERS SECTION
     def select_attributes(self):
