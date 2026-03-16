@@ -667,16 +667,16 @@ class DialogCodeAV(QtWidgets.QDialog):
         code_counts = []
         for c in self.codes:
             parameters = [c['cid'], self.app.settings['codername'], self.file_['id']]
-            sql = "select code_name.catid, count(code_av.cid) from code_av join code_name " \
-                "on code_name.cid=code_av.cid where code_av.cid=? and code_av.owner=? " \
+            sql = "select count(code_av.cid) from code_av " \
+                "where code_av.cid=? and code_av.owner=? " \
                 "and code_av.id=?"
             cur.execute(sql, parameters)
             result = cur.fetchone()
             sql_text = "select count(cid) from code_text where cid=? and owner=? and fid=?"
-            text_parameters = [c['cid'], self.app.settings['codername'],self.transcription[0]]
+            text_parameters = [c['cid'], self.app.settings['codername'], self.transcription[0]]
             cur.execute(sql_text, text_parameters)
             result_text = cur.fetchone()
-            code_counts.append([c['cid'], result[0], result[1] + result_text[0]])
+            code_counts.append([c['cid'], c['catid'], result[0] + result_text[0]])
 
         categories = deepcopy(self.categories)
         # Set up category counts
@@ -691,7 +691,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         # until only top categories are left
         sub_categories = copy(categories)
         counter = 0
-        while len(sub_categories) > 0 or counter < 10000:
+        while len(sub_categories) > 0 and counter < 10000:
             leaf_list = []
             branch_list = []
             for cat in sub_categories:
@@ -2551,11 +2551,11 @@ class DialogCodeAV(QtWidgets.QDialog):
                             "warning").exec()
                     return
             # Find the code in the list
-            found = None
+            found = -1
             for i in range(0, len(self.codes)):
                 if self.codes[i]['cid'] == int(selected.text(1)[4:]):
                     found = i
-            if not found:
+            if found == -1:
                 return
             # update codes list and database
             cur = self.app.conn.cursor()
@@ -2578,11 +2578,11 @@ class DialogCodeAV(QtWidgets.QDialog):
                     Message(self.app, _('Duplicate category name'), msg_, "warning").exec()
                     return
             # Find the category in the list
-            found = None
+            found = -1
             for i in range(0, len(self.categories)):
                 if self.categories[i]['catid'] == int(selected.text(1)[6:]):
                     found = i
-            if not found:
+            if found == -1:
                 return
             # update category list and database
             cur = self.app.conn.cursor()
