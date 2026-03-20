@@ -786,8 +786,8 @@ class AiLLM():
         """ 
         if self.app.settings.get('ai_language_ui', 'True') == 'True':
             # get ui language
-            lang_long = {"de": "Deutsch", "en": "English", "es": "Español", "fr": "Français", "it": "Italiano", "pt": "Português"}
-            lang = lang_long[self.app.settings['language']] 
+            lang_long = {"de": "Deutsch", "en": "English", "es": "Español", "fr": "Français", "it": "Italiano", "ja": "日本語", "pt": "Português", "sv": "Svenska", "zh": "中国人"}
+            lang = lang_long.get(self.app.settings['language'], 'English')
             if lang is None:
                 lang = 'English'
         else:
