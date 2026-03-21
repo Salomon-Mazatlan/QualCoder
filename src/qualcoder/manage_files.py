@@ -441,7 +441,10 @@ class DialogManageFiles(QtWidgets.QDialog):
 
         row = self.ui.tableWidget.currentRow()
         col = self.ui.tableWidget.currentColumn()
-        item_text = self.ui.tableWidget.item(row, col).text()
+        cell_item = self.ui.tableWidget.item(row, col)  # guard against None <- L
+        if cell_item is None:  # prevent AttributeError on empty cells <- L
+            return
+        item_text = cell_item.text()  # use guarded variable <- L
         # Use these next few lines to use for moving a linked file into or an internal file out of the project folder
         mediapath = None
         risid = None
