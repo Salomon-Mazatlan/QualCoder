@@ -725,7 +725,7 @@ class DialogCodeText(QtWidgets.QWidget):
                 self.ui.label_code.setToolTip(tt)
                 break
         selected_text = self.ui.plainTextEdit.textCursor().selectedText()
-        if len(selected_text) > 0:
+        if len(selected_text) > 0 and not (QtWidgets.QApplication.mouseButtons() & Qt.MouseButton.RightButton):
             self.mark()
         # When a code is selected undo the show selected code features
         self.highlight()
