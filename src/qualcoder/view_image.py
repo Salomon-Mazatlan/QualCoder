@@ -1193,6 +1193,7 @@ class DialogCodeImage(QtWidgets.QDialog):
                         handle_item.setBrush(QBrush(QtGui.QColor("#ff0000")))  # Red color for visibility <- L
                         handle_item.setData(0, "resize_handle")  # Main tag to detect clicks <- L
                         handle_item.setData(1, h_type)          # Identifies the specific corner <- L
+                        handle_item.setZValue(9999.0)           # Ensure that the handles always remain on top of everything <- L
                         self.scene.addItem(handle_item)
                 if self.show_code_captions == 1:
                     self.caption(x, y, code_name)
@@ -1804,6 +1805,7 @@ class DialogCodeImage(QtWidgets.QDialog):
                         self.interactive_rect_item = QtWidgets.QGraphicsRectItem(vx, vy, vw, vh)
                         pen = QtGui.QPen(QtGui.QColor("#ff0000"), 2, QtCore.Qt.PenStyle.DashLine)
                         self.interactive_rect_item.setPen(pen)
+                        self.interactive_rect_item.setZValue(9999.0)  # Keeps the dynamic rectangle above everything during dragging <- L
                         self.scene.addItem(self.interactive_rect_item)
                         
                         # Temporarily disable standard selection rubber band
@@ -2146,36 +2148,50 @@ class DialogCodeImage(QtWidgets.QDialog):
         code_name = code_.text(0)
         pix_h_scaled = self.pixmap.height() * self.scale
         pix_w_scaled = self.pixmap.width() * self.scale
-        width = p1.x() - self.selection.x()
-        height = p1.y() - self.selection.y()
-        x = self.selection.x()
-        y = self.selection.y()
+        
+        # Determine the visual dimensions considering rotation <- L
+        vis_w = pix_w_scaled
+        vis_h = pix_h_scaled
+        if self.degrees in (90, 270):
+            vis_w = pix_h_scaled
+            vis_h = pix_w_scaled
+            
+        # Strictly anchor the start and end to the visible bounds of the image
+        start_x = max(0.0, min(self.selection.x(), vis_w))
+        start_y = max(0.0, min(self.selection.y(), vis_h))
+        end_x = max(0.0, min(p1.x(), vis_w))
+        end_y = max(0.0, min(p1.y(), vis_h))
+
+        width = end_x - start_x
+        height = end_y - start_y
+        x = start_x
+        y = start_y
+        
         # Reposition x and y and width, height based on rotation
         if self.degrees == 90:
             x = y
-            # Need to use the p1 x point (mouse release point) as the y low values are reversed on the right hand side
-            y = pix_h_scaled - p1.x()
+            # Need to use the end_x point as the y low values are reversed on the right hand side
+            y = pix_h_scaled - end_x
             width, height = height, width
         if self.degrees == 180:
-            x = pix_w_scaled - p1.x()
-            y = pix_h_scaled - p1.y()
+            x = pix_w_scaled - end_x
+            y = pix_h_scaled - end_y
         if self.degrees == 270:
             y = x
-            # Need to use the p1 y point (mouse release point) as the y low values are reversed on the left hand side
-            x = pix_w_scaled - p1.y()
+            # Need to use the end_y point as the y low values are reversed on the left hand side
+            x = pix_w_scaled - end_y
             width, height = height, width
+            
         if width < 0:
             x = x + width
             width = abs(width)
         if height < 0:
             y = y + height
             height = abs(height)
-        # Outside image area, do not code
-        for item in self.scene.items():
-            if type(item) == QtWidgets.QGraphicsPixmapItem:
-                if x + width > item.boundingRect().width() or y + height > item.boundingRect().height():
-                    self.selection = None
-                    return
+            
+        # The "Outside image area" block was removed, as the mathematical anchoring ensures that the 
+        # coordinates always remain within bounds <- L
+        
         x_unscaled = round(x / self.scale)
         y_unscaled = round(y / self.scale)
         width_unscaled = round(width / self.scale)
@@ -2221,7 +2237,20 @@ class DialogCodeImage(QtWidgets.QDialog):
         new_x, new_y = orig_x, orig_y
         new_right, new_bottom = orig_right, orig_bottom
         
+        # Get mouse coordinates <- L
         mouse_x, mouse_y = pos.x(), pos.y()
+        
+        # Calculate the current visual dimensions considering rotation <- L
+        vis_w = self.pixmap.width() * self.scale
+        vis_h = self.pixmap.height() * self.scale
+        if self.degrees in (90, 270):
+            vis_w = self.pixmap.height() * self.scale
+            vis_h = self.pixmap.width() * self.scale
+            
+        # Strictly constrain the mouse coordinates to the image boundaries <- L
+        mouse_x = max(0.0, min(mouse_x, vis_w))
+        mouse_y = max(0.0, min(mouse_y, vis_h))
+        
         min_size = 10 * self.scale  # Prevents the box from shrinking to near invisibility
         
         # Logic to push the rectangle walls depending on the dragged corner
