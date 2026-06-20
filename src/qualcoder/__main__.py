@@ -454,6 +454,59 @@ class App(object):
                 pass
         return True
 
+    # listar y descargar idiomas desde el repositorio de QualCoder<- L
+    # List and download languages from the QualCoder repository
+    def get_remote_language_codes(self):  # < - L
+        """
+        Devuelve los codigos de idioma con paquete .zip en el repositorio de GitHub,
+        Lanza excepcion si no hay conexion.        
+        
+        Return language codes that have a .zip package in the GitHub repository,
+        Raises an excception if offline
+        """
+        
+        api_url = ('https://api.github.com/repos/ccbogel/QualCoder/'
+                   'contents/other_languages?ref=master')
+        request = urllib.request.Request(api_url, headers={
+            'Accept': 'application/vnd.github.v3+json',
+            'User-Agent': 'QualCoder'})
+        payload = json.loads(urllib.request.urlopen(request, timeout=20).read())
+        codes = []
+        for entry in payload:
+            name = entry.get('name', '')
+            if entry.get('type') == 'file' and name.lower().endswith('.zip'):
+                code = os.path.splitext(name)[0]
+                if self._is_valid_language_code(code):
+                    codes.append(code)
+        return sorted(set(codes))
+
+    def download_user_language_zip(self, lang_code):  # <- L
+        """
+        Descarga el paquete .zip del idioma desde GitHub y lo extrae en la carpeta de usuario.
+        Devuelve la ruta del .zip guardado
+        
+        Download the language .zip package from GitHub and extract it into the user folder.
+        Returns the path of the saved .zip
+        """
+        
+        if not self._is_valid_language_code(lang_code):
+            raise ValueError(f'Invalid language code: {lang_code}')
+        raw_url = ('https://raw.githubusercontent.com/ccbogel/QualCoder/'
+                   f'master/other_languages/{lang_code}.zip')
+        request = urllib.request.Request(raw_url, headers={'User-Agent': 'QualCoder'})
+        data = urllib.request.urlopen(request, timeout=60).read()
+        if data[:2] != b'PK':  # firma de archivo zip. zip file signature
+            raise ValueError('Downloaded file is not a valid zip package.')
+        user_i18n_dir = self.get_user_i18n_dir()
+        os.makedirs(user_i18n_dir, exist_ok=True)
+        zip_path = self.get_user_language_zip_path(lang_code)
+        with open(zip_path, 'wb') as file_:
+            file_.write(data)
+        # Extrae ".qm" ".mo" y ".txt" de inmediato (valida el contenido del zip)
+        # Extract ".qm" ".mo" and ".txt"  immediately (validates the zip content)
+        self.sync_current_language_zip(lang_code)
+        return zip_path
+
     def get_language_file_path(self, lang_code, extension):
         """Return the newest translation file for one language and extension."""
 
