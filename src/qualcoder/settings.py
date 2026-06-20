@@ -338,10 +338,103 @@ class DialogSettings(QtWidgets.QDialog):
         item_type = self.ui.comboBox_language.itemData(index, QtCore.Qt.ItemDataRole.UserRole + 1)
         if item_type != 'action':
             return
-        self.open_user_language_folder()
+        self.prompt_add_language()  # antes: self.open_user_language_folder() # before: self.open_user_language_folder()  <- L
         if self.selected_language_index >= 0:
             with QtCore.QSignalBlocker(self.ui.comboBox_language):
                 self.ui.comboBox_language.setCurrentIndex(self.selected_language_index)
+
+    # EXPERIMENTAL: Elegir entre descargar del repositorio o agregar manualmente  <- L
+    # EXPERIMENTAL: Choose between downloading from the repository or adding manually
+    def prompt_add_language(self):  # <- L
+        """
+        Pregunta si descargar el idioma del repositorio de QualCoder o abrir la carpeta.
+        
+        Ask whether to download the language from the QualCoder repo or open the folder.
+        """
+        
+        msg_box = Message(self.app, _("Add more languages..."),
+                          _("How do you want to add a language?"))
+        download_btn = msg_box.addButton(_("Download from repository"),
+                                         QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+        manual_btn = msg_box.addButton(_("Add manually (open folder)"),
+                                       QtWidgets.QMessageBox.ButtonRole.ActionRole)
+        msg_box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+        msg_box.exec()
+        clicked = msg_box.clickedButton()
+        if clicked == download_btn:
+            self.download_language_from_repo()
+        elif clicked == manual_btn:
+            self.open_user_language_folder()
+
+    def download_language_from_repo(self):  # <- L
+        """
+        Lista los idiomas del repositorio, descarga el elegido, lo extrae y lo selecciona.
+        
+        List repo languages, download the chosen one, extract it and select it.
+        """
+        
+        # 1 Intentar listar los idiomas remotos
+        # 1 Try to list remote languages
+        remote_codes = []
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            remote_codes = self.app.get_remote_language_codes()
+        except Exception as err:
+            logger.warning(str(err))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        # 2 Determinar el codigo de idioma (lista o, si falla, entrada manual)
+        # 2  Determine the language code (list, or manual entry if listing failed)
+        already = {code for code, _label in self.app.get_builtin_language_labels()}
+        already.update(self.app.get_complete_user_language_codes())
+        if remote_codes:
+            labels = []
+            code_by_label = {}
+            for code in remote_codes:
+                native = QtCore.QLocale(code).nativeLanguageName()  # detecta idioma. Detect language
+                english = QtCore.QLocale.languageToString(QtCore.QLocale(code).language())
+                label = f"{native} ({english}) - {code}" if native else code
+                if code in already:
+                    label += "  " + _("[installed]")
+                labels.append(label)
+                code_by_label[label] = code
+            label, ok = QtWidgets.QInputDialog.getItem(self, _("Download language"),
+                _("Select a language to download:"), labels, 0, False)
+            if not ok or not label:
+                return
+            lang_code = code_by_label[label]
+        else:  # Sin lista: pedir el codigo manualmente. No list: ask for the code
+            msg = (_("Could not retrieve the language list from GitHub.") + "\n" +
+                   _("Enter a language code to download (for example: ro, nl, ko):"))
+            lang_code, ok = QtWidgets.QInputDialog.getText(self, _("Download language"), msg)
+            if not ok or not lang_code.strip():
+                return
+            lang_code = lang_code.strip()
+
+        # 3 Descargar y extraer el paquete
+        # 3 Download and extract the packaage
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            self.app.download_user_language_zip(lang_code)
+        except Exception as err:
+            QtWidgets.QApplication.restoreOverrideCursor()
+            logger.warning(str(err))
+            Message(self.app, _("Download language"),
+                    _("The language could not be downloaded or installed:") + "\n\n" + str(err),
+                    "warning").exec()
+            return
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        # 4 Refrescar el combo, seleccionar el idioma y avisar del reinicio
+        # 4 Refresh the combo, select the language and warn about the restart
+        self.refresh_language_combo()
+        self.set_language_combo_selection(lang_code)
+        native = QtCore.QLocale(lang_code).nativeLanguageName() or lang_code
+        Message(self.app, _("Download language"),
+                _("Language installed:") + f" {native} ({lang_code})\n\n" +
+                _("Restart QualCoder to use the new language."), "Information").exec()
 
     def open_user_language_folder(self):
         """Create the user i18n folder and readme if needed, then open it."""
