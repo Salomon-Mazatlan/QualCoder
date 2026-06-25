@@ -59,7 +59,7 @@ from qualcoder.GUI.ui_main import Ui_MainWindow
 from qualcoder.helpers import Message, ImportPlainTextCodes
 from qualcoder.import_survey import DialogImportSurvey
 from qualcoder.information import DialogInformation, menu_shortcuts_display, coding_shortcuts_display
-from qualcoder.information import manage_tab_info, coding_tab_info, reports_tab_info
+from qualcoder.information import manage_tab_info, coding_tab_info, reports_tab_info, render_tab_info_markdown
 from qualcoder.journals import DialogJournals
 from qualcoder.manage_files import DialogManageFiles
 from qualcoder.manage_links import DialogManageLinks
@@ -132,11 +132,7 @@ BUILTIN_LANGUAGE_LABELS = [
     ("de", "Deutsch"),
     ("en", "English"),
     ("es", "Español"),
-    ("fr", "Français"),
-    ("ja", "日本語"),
-    ("pt", "Português"),
-    ("sv", "Svenska"),
-    ("zh", "中国人"),
+    ("fr", "Français")
 ]
 
 
@@ -287,11 +283,15 @@ class App(object):
                 f.write(os.linesep)
 
     def get_most_recent_projectpath(self):
-        """ Get most recent project path from .qualcoder/recent_projects.txt """
+        """ Get most recent project path from .qualcoder/recent_projects.txt
+        Return:
+            path - String or None
+        """
 
         result = self.read_previous_project_paths()
         if result:
             return result[0]
+        return None
 
     def get_builtin_i18n_dir(self):
         """Return the directory that contains bundled translation files."""
@@ -442,14 +442,14 @@ class App(object):
                         f'"{required_names[0]}" and "{required_names[1]}" in the zip root.'
                     ) from err
             for extension, target_path in target_paths.items():
-                data = zip_file.read(f'{lang_code}.{extension}')
+                lang_data = zip_file.read(f'{lang_code}.{extension}')
                 with open(target_path, 'wb') as file_:
-                    file_.write(data)
+                    file_.write(lang_data)
             try:
-                data = zip_file.read(optional_name)
+                lang_data = zip_file.read(optional_name)
                 txt_path = os.path.join(user_i18n_dir, f'{lang_code}.txt')
                 with open(txt_path, 'wb') as file_:
-                    file_.write(data)
+                    file_.write(lang_data)
             except KeyError:
                 pass
         return True
@@ -959,7 +959,10 @@ class App(object):
         if len(ai_models) == 0:  # no models loaded, create default
             ai_models = get_default_ai_models()
         else:
-            current_ai_model_index = int(result.get('ai_model_index', -1)) 
+            try:
+                current_ai_model_index = int(result.get('ai_model_index', -1))
+            except ValueError:
+                current_ai_model_index = 0
             ai_models, result['ai_model_index'] = update_ai_models(ai_models, current_ai_model_index)
         return result, ai_models
 
@@ -1111,6 +1114,7 @@ class App(object):
         QTabWidget::pane {border: 1px solid #858585;}\n\
         QTableWidget {border: 1px solid #ffaa00; gridline-color: #707070;}\n\
         QTableWidget:focus {border: 3px solid #ffaa00;}\n\
+        QTextBrowser::document::link {color:red;}\n\
         QTextEdit {border: 1px solid #ffaa00; selection-color: #000000; selection-background-color:#ffffff;}\n\
         QTextEdit:focus {border: 2px solid #ffaa00;}\n\
         QToolTip {background-color: #2a2a2a; color:#eeeeee; border: 1px solid #f89407; }\n\
@@ -1680,18 +1684,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.app = app
         self.force_quit = force_quit
         self.journal_display = None
-
         self.ai_chat_window = None
-        
         if platform.system() == "Windows" and self.app.settings['stylesheet'] == "native":
             # Make 'Fusion' the standard native style on Windows https://www.qt.io/blog/dark-mode-on-windows-11-with-qt-6.5
             # The default 'Windows' style seems partially broken at the moment, in combination with the native dark mode.
             # On macOS, 'Fusion' is the default style anyways (automatically chosen by Qt).
             QtWidgets.QApplication.instance().setStyle("Fusion")
-       
+
         QtWidgets.QMainWindow.__init__(self)
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self.init_placeholder_tab_layouts()
         # Test of macOS menu bar
         if self.app.settings['stylesheet'] == "native":
             self.ui.menubar.setNativeMenuBar(True)
@@ -1748,6 +1751,293 @@ Click "Yes" to start now.')
             tb_obj = err.__traceback__
             # log the exception and show error msg
             qt_exception_hook.exception_hook(type_e, value, tb_obj)
+
+    def init_placeholder_tab_layouts(self):
+        """Put the startup placeholder browsers into real tab layouts."""
+
+        self.tab_placeholders = {
+            self.ui.tab_manage: self.ui.textBrowser_manage,
+            self.ui.tab_coding: self.ui.textBrowser_coding,
+            self.ui.tab_reports: self.ui.textBrowser_reports,
+        }
+        for tab_widget, placeholder in self.tab_placeholders.items():
+            layout = tab_widget.layout()
+            if layout is None:
+                layout = QtWidgets.QVBoxLayout(tab_widget)
+                layout.setContentsMargins(9, 9, 9, 9)
+            if layout.indexOf(placeholder) == -1:
+                layout.addWidget(placeholder)
+            placeholder.setOpenExternalLinks(False)
+            placeholder.setOpenLinks(False)
+            placeholder.anchorClicked.connect(self.handle_placeholder_link)
+            placeholder.show()
+        self.update_placeholder_tab_styles()
+
+    @staticmethod
+    def _object_name_aliases(object_name):
+        """Return case-insensitive aliases for a menu or action objectName."""
+
+        if not object_name:
+            return set()
+        aliases = {object_name.casefold()}
+        for prefix in ("menu", "action"):
+            if object_name.startswith(prefix) and len(object_name) > len(prefix):
+                aliases.add(object_name[len(prefix):].casefold())
+        return aliases
+
+    def _matches_object_name(self, segment, obj):
+        """Check whether a URI segment matches an object by name."""
+
+        return segment.casefold() in self._object_name_aliases(obj.objectName())
+
+    def _top_level_menus(self):
+        """Return all top-level menus from the menubar."""
+
+        return [action.menu() for action in self.ui.menubar.actions() if action.menu() is not None]
+
+    def _resolve_placeholder_menu_link(self, url):
+        """Resolve a qualcoder://menu/... link to a QMenu or QAction."""
+
+        if url.host().casefold() != "menu":
+            raise ValueError(_("Unsupported QualCoder link target: ") + url.host())
+        path_segments = [segment for segment in url.path().split("/") if segment]
+        if not path_segments:
+            raise ValueError(_("Menu link has no target path."))
+
+        current_menu = next(
+            (menu for menu in self._top_level_menus() if self._matches_object_name(path_segments[0], menu)),
+            None,
+        )
+        if current_menu is None:
+            raise ValueError(_("Menu not found: ") + path_segments[0])
+
+        menu_chain = [current_menu]
+        for index, segment in enumerate(path_segments[1:], start=1):
+            match = None
+            for action in current_menu.actions():
+                if action.isSeparator():
+                    continue
+                submenu = action.menu()
+                if submenu is not None and self._matches_object_name(segment, submenu):
+                    match = submenu
+                    menu_chain.append(submenu)
+                    break
+                if self._matches_object_name(segment, action):
+                    match = action
+                    break
+            if match is None:
+                raise ValueError(_("Menu entry not found: ") + segment)
+            if isinstance(match, QtWidgets.QMenu):
+                current_menu = match
+                continue
+            if index != len(path_segments) - 1:
+                raise ValueError(_("Action cannot contain subentries: ") + segment)
+            return match, menu_chain
+        return current_menu, menu_chain
+
+    def _iter_actions_with_menu_chain(self, menu=None, menu_chain=None):
+        """Yield actions together with the chain of menus containing them."""
+
+        if menu is None:
+            for top_menu in self._top_level_menus():
+                yield from self._iter_actions_with_menu_chain(top_menu, [top_menu])
+            return
+        if menu_chain is None:
+            menu_chain = [menu]
+        for action in menu.actions():
+            if action.isSeparator():
+                continue
+            yield action, list(menu_chain)
+            submenu = action.menu()
+            if submenu is not None:
+                yield from self._iter_actions_with_menu_chain(submenu, menu_chain + [submenu])
+
+    def _resolve_placeholder_action_link(self, url):
+        """Resolve a qualcoder://action/... link to a QAction."""
+
+        if url.host().casefold() != "action":
+            raise ValueError(_("Unsupported QualCoder link target: ") + url.host())
+        path_segments = [segment for segment in url.path().split("/") if segment]
+        if not path_segments:
+            raise ValueError(_("Action link has no target path."))
+        if len(path_segments) == 1:
+            matches = [
+                (action, menu_chain)
+                for action, menu_chain in self._iter_actions_with_menu_chain()
+                if self._matches_object_name(path_segments[0], action)
+            ]
+            if not matches:
+                raise ValueError(_("Action not found: ") + path_segments[0])
+            if len(matches) > 1:
+                raise ValueError(_("Action name is ambiguous: ") + path_segments[0])
+            return matches[0]
+
+        resolved, menu_chain = self._resolve_placeholder_menu_link(
+            QtCore.QUrl(f"qualcoder://menu/{'/'.join(path_segments)}")
+        )
+        if isinstance(resolved, QtWidgets.QMenu):
+            raise ValueError(_("Action link must end with a menu action."))
+        return resolved, menu_chain
+
+    def _popup_menu_chain(self, menu_chain, active_action=None):
+        """Display a top-level menu and any nested submenu chain."""
+
+        if not menu_chain:
+            return
+        top_menu = menu_chain[0]
+        menu_bar_action = next(
+            (action for action in self.ui.menubar.actions() if action.menu() == top_menu),
+            None,
+        )
+        if menu_bar_action is not None:
+            rect = self.ui.menubar.actionGeometry(menu_bar_action)
+            popup_pos = self.ui.menubar.mapToGlobal(rect.bottomLeft())
+        else:
+            popup_pos = QtGui.QCursor.pos()
+        top_menu.popup(popup_pos)
+        if len(menu_chain) > 1:
+            top_menu.setActiveAction(menu_chain[1].menuAction())
+        elif active_action is not None:
+            top_menu.setActiveAction(active_action)
+
+        parent_menu = top_menu
+        for submenu in menu_chain[1:]:
+            QtWidgets.QApplication.processEvents()
+            rect = parent_menu.actionGeometry(submenu.menuAction())
+            submenu.popup(parent_menu.mapToGlobal(rect.topRight()))
+            submenu_index = menu_chain.index(submenu)
+            next_menu = menu_chain[submenu_index + 1] if submenu_index + 1 < len(menu_chain) else None
+            if next_menu is not None:
+                submenu.setActiveAction(next_menu.menuAction())
+            elif active_action is not None:
+                submenu.setActiveAction(active_action)
+            parent_menu = submenu
+
+    def _show_placeholder_link_error(self, url_text, details):
+        """Show a visible error for an invalid placeholder link."""
+
+        msg = _("Cannot open link: ") + url_text + "\n\n" + details
+        logger.warning(msg)
+        Message(self.app, _("Link error"), msg, "warning").exec()
+
+    def handle_placeholder_link(self, url):
+        """Open external links or dispatch custom qualcoder:// menu links."""
+
+        url_text = url.toString()
+        scheme = url.scheme().casefold()
+        if scheme in ("http", "https"):
+            webbrowser.open(url_text)
+            return
+        if scheme != "qualcoder":
+            self._show_placeholder_link_error(url_text, _("Unsupported link scheme."))
+            return
+        try:
+            host = url.host().casefold()
+            if host == "help":
+                page_path = url.path().lstrip("/")
+                self.app.help_wiki(page_path)
+                return
+            if host == "menu":
+                target, menu_chain = self._resolve_placeholder_menu_link(url)
+                if isinstance(target, QtWidgets.QMenu):
+                    self._popup_menu_chain(menu_chain)
+                    return
+                self._popup_menu_chain(menu_chain, active_action=target)
+                return
+            if host == "action":
+                target, menu_chain = self._resolve_placeholder_action_link(url)
+                if not target.isEnabled():
+                    raise ValueError(_("Menu action is currently disabled."))
+                target.trigger()
+                return
+            raise ValueError(_("Unsupported QualCoder link target: ") + url.host())
+        except ValueError as err:
+            self._show_placeholder_link_error(url_text, str(err))
+
+    def update_placeholder_tab_styles(self):
+        """Match placeholder browser colors and link styling to the application theme."""
+
+        action_log_background = self.ui.textEdit.viewport().palette().color(
+            QtGui.QPalette.ColorRole.Base
+        ).name()
+        text_color = self.ui.textEdit.viewport().palette().color(QtGui.QPalette.ColorRole.Text).name()
+        browser_style = f"""
+            QTextBrowser {{
+                background-color: {action_log_background};
+                border: none;
+            }}
+            QTextBrowser:focus {{
+                background-color: {action_log_background};
+                border: none;
+            }}
+        """
+        for tab_widget, placeholder in self.tab_placeholders.items():
+            placeholder.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            placeholder.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
+            placeholder.viewport().setStyleSheet(
+                f"background-color: {action_log_background}; border: none;"
+            )
+            placeholder.setStyleSheet(browser_style)
+            placeholder.document().setDefaultStyleSheet(
+                f"a {{ color: {text_color}; }} "
+                f"a:visited {{ color: {text_color}; }}"
+            )
+        self.refresh_placeholder_tab_content()
+
+    def refresh_placeholder_tab_content(self):
+        """Render placeholder tab Markdown with the current theme colors."""
+
+        for tab_widget in self.tab_placeholders:
+            self.refresh_placeholder_browser(tab_widget)
+
+    def refresh_placeholder_browser(self, tab_widget):
+        """Render one placeholder browser with the current theme colors."""
+
+        placeholder = self.tab_placeholders.get(tab_widget)
+        if placeholder is None:
+            return
+        highlight_color = self.app.highlight_color()
+        text_color = self.ui.textEdit.viewport().palette().color(QtGui.QPalette.ColorRole.Text).name()
+        doc_font_size = self.app.settings["docfontsize"]
+        doc_font_family = self.app.settings.get("docfont", self.app.settings["font"])
+        placeholder_map = {
+            self.ui.tab_manage: (manage_tab_info, "mdi6.file-outline"),
+            self.ui.tab_coding: (coding_tab_info, "mdi6.tag-text-outline"),
+            self.ui.tab_reports: (reports_tab_info, "mdi6.format-list-group"),
+        }
+        markdown_text_func, heading_icon_name = placeholder_map[tab_widget]
+        placeholder.setHtml(
+            render_tab_info_markdown(
+                markdown_text_func(),
+                highlight_color,
+                text_color,
+                doc_font_size,
+                doc_font_family,
+                heading_icon_name=heading_icon_name,
+            )
+        )
+
+    def clear_tab_widgets(self, tab_widget, show_placeholder=True):
+        """Remove loaded tab content and optionally show the placeholder browser."""
+
+        layout = tab_widget.layout()
+        if layout is None:
+            return
+        placeholder = self.tab_placeholders.get(tab_widget)
+        for i in reversed(range(layout.count())):
+            widget = layout.itemAt(i).widget()
+            if widget is None or widget == placeholder:
+                continue
+            widget.close()
+            widget.setParent(None)
+        if placeholder is not None:
+            if layout.indexOf(placeholder) == -1:
+                layout.addWidget(placeholder)
+            if show_placeholder:
+                # Re-render the placeholder when it is restored so project switches
+                # and tab resets never leave a previously cleared browser blank.
+                self.refresh_placeholder_browser(tab_widget)
+            placeholder.setVisible(show_placeholder)
     
     def init_ui(self):
         """ Set up menu triggers """
@@ -1853,9 +2143,7 @@ Click "Yes" to start now.')
         self.ui.tabWidget.setCurrentIndex(0)
         self.ai_chat()
 
-        self.ui.textBrowser_manage.setHtml(manage_tab_info)
-        self.ui.textBrowser_coding.setHtml(coding_tab_info)
-        self.ui.textBrowser_reports.setHtml(reports_tab_info)
+        self.refresh_placeholder_tab_content()
 
         # Add tab widget icons
         try:
@@ -2360,7 +2648,6 @@ Click "Yes" to start now.')
     def code_organiser(self):
         """ Organise codes structure. """
 
-        self.ui.textBrowser_coding.setText("")
         ui = CodeOrganiser(self.app, self.ui.textEdit)
         ui.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
         self.tab_layout_helper(self.ui.tab_reports, None)
@@ -2378,21 +2665,13 @@ Click "Yes" to start now.')
          If there is a layout, then remove all widgets from it and add the new widget. """
 
         self.ui.tabWidget.setCurrentWidget(tab_widget)
-        # Check the tab has a layout and widgets
         contents = tab_widget.layout()
         if contents is None:
-            # Tab has no layout so add one with widget
-            layout = QtWidgets.QVBoxLayout()
-            if ui is not None:
-                layout.addWidget(ui)
-            tab_widget.setLayout(layout)
-        else:
-            # Remove widgets from layout
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
-            if ui is not None:
-                contents.addWidget(ui)
+            contents = QtWidgets.QVBoxLayout(tab_widget)
+            contents.setContentsMargins(9, 9, 9, 9)
+        self.clear_tab_widgets(tab_widget, show_placeholder=ui is None)
+        if ui is not None:
+            contents.addWidget(ui)
 
     def codebook(self):
         """ Export a text file code book of categories and codes. """
@@ -2683,22 +2962,8 @@ Click "Yes" to start now.')
         # New project, so tell open project NOT to back up, as there will be nothing in there to back up
         self.open_project(self.app.project_path, "yes")
         self.ui.tabWidget.setCurrentWidget(self.ui.tab_action_log)
-        # Remove widgets from each tab
-        contents = self.ui.tab_reports.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
-        contents = self.ui.tab_coding.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
-        contents = self.ui.tab_manage.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
+        for tab_widget in (self.ui.tab_reports, self.ui.tab_coding, self.ui.tab_manage):
+            self.clear_tab_widgets(tab_widget, show_placeholder=True)
 
     def change_settings(self, section=None, enable_ai=False):
         """ Change default settings - the coder name, font, font size.
@@ -2719,6 +2984,7 @@ Click "Yes" to start now.')
         self.settings_report()
         font = f'font: {self.app.settings["fontsize"]}pt "{self.app.settings["font"]}";'
         self.setStyleSheet(font)
+        self.update_placeholder_tab_styles()
         self.ai_chat_window.init_styles()
         
         if self.app.settings['ai_enable'] == 'True':
@@ -2730,22 +2996,8 @@ Click "Yes" to start now.')
         if ui.coder_names_changes:
             if current_coder != self.app.settings['codername']:
                 self.ui.textEdit.append(_("Coder name changed to: ") + self.app.settings['codername'])
-            # Remove widgets from each tab
-            contents = self.ui.tab_reports.layout()
-            if contents:
-                for i in reversed(range(contents.count())):
-                    contents.itemAt(i).widget().close()
-                    contents.itemAt(i).widget().setParent(None)
-            contents = self.ui.tab_coding.layout()
-            if contents:
-                for i in reversed(range(contents.count())):
-                    contents.itemAt(i).widget().close()
-                    contents.itemAt(i).widget().setParent(None)
-            contents = self.ui.tab_manage.layout()
-            if contents:
-                for i in reversed(range(contents.count())):
-                    contents.itemAt(i).widget().close()
-                    contents.itemAt(i).widget().setParent(None)
+            for tab_widget in (self.ui.tab_reports, self.ui.tab_coding, self.ui.tab_manage):
+                self.clear_tab_widgets(tab_widget, show_placeholder=True)
                     
     def project_memo(self):
         """ Give the entire project a memo. """
@@ -2768,7 +3020,7 @@ Click "Yes" to start now.')
             self.app.delete_backup = False
 
     def open_project(self, path_:str|bool="", newproject:str="no"):
-        """ Open an existing project.
+        """ Open an existing project. TODO: WHY IS PATH TYPE AS str AND bool ? should be only str
         if set, also save a backup datetime stamped copy at the same time.
         Do not back up on a newly created project, as it will not contain data.
         A backup is created if settings backup is True.
@@ -2778,7 +3030,7 @@ Click "Yes" to start now.')
         Update older databases to current version mainly by adding columns and tables.
         Table constraints are not updated (code_text duplicated codings).
         Args:
-            path: if path is "" then get the path from a dialog, otherwise use the supplied path
+            path_: if path is "" then get the path from a dialog, otherwise use the supplied path
             newproject: yes or no  if yes then do not make an initial backup
         """
 
@@ -3322,22 +3574,8 @@ Click "Yes" to start now.')
         Delete old backups. Hide menu options. """
 
         self.journal_display = None
-        # Remove widgets from each tab
-        contents = self.ui.tab_reports.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
-        contents = self.ui.tab_coding.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
-        contents = self.ui.tab_manage.layout()
-        if contents:
-            for i in reversed(range(contents.count())):
-                contents.itemAt(i).widget().close()
-                contents.itemAt(i).widget().setParent(None)
+        for tab_widget in (self.ui.tab_reports, self.ui.tab_coding, self.ui.tab_manage):
+            self.clear_tab_widgets(tab_widget, show_placeholder=True)
         # Added if statement for the first opening of QualCoder. Looks odd closing a project that is not there.
         if self.app.project_name != "":
             self.ui.textEdit.append(_("Closing project: ") + self.app.project_name)
@@ -3500,7 +3738,6 @@ Click "Yes" to start now.')
         citation = f"Citation:\nCurtain C, Dröge K, Missaghieh--Poncet J, Salomón L. (2026) {self.app.version} [Computer software].\n"
         citation += f"Retrieved from https://github.com/ccbogel/QualCoder/releases/tag/{tag}\n"
         self.ui.textEdit.append(citation)
-
 
 def gui():
     # print("Qt version: " + str(QtCore.qVersion()))
