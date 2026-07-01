@@ -84,7 +84,7 @@ class DialogAiTokenUsage(QtWidgets.QDialog):
         self.ui.pushButton_reset.clicked.connect(self.reset_usage)
         self.load_data()
 
-    # ------------------------------------------------------------- table setup
+    # table setup
     def _setup_models_table(self):
         headers = [_('Provider'), _('Model'), _('Calls'), _('Input'),
                    _('Output'), _('Reasoning/other'), _('Total'), _('Estimated'), _('Last used')]
@@ -102,7 +102,7 @@ class DialogAiTokenUsage(QtWidgets.QDialog):
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
 
-    # ------------------------------------------------------------- data loading
+    # data loading
     @staticmethod
     def _num_item(value):
         """A right aligned, thousands separated, non editable numeric cell."""
@@ -198,7 +198,7 @@ class DialogAiTokenUsage(QtWidgets.QDialog):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------ actions
+    # actions
     def export_csv(self):
         rows = self.tracker.all_rows()
         if not rows:
