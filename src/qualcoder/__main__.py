@@ -87,6 +87,7 @@ from qualcoder.view_charts import ViewCharts
 from qualcoder.view_graph import ViewGraph
 from qualcoder.view_image import DialogCodeImage
 from qualcoder.ai_prompts import DialogAiEditPrompts
+from qualcoder.ai_token_usage import DialogAiTokenUsage
 from qualcoder.ai_llm import get_default_ai_models, update_ai_models
 from qualcoder.speakers import speaker_coder_name
 
@@ -2072,6 +2073,7 @@ Click "Yes" to start now.')
         self.ui.actionAI_Rebuild_internal_memory.triggered.connect(self.ai_rebuild_memory)
         self.ui.actionAI_Edit_Project_Memo.triggered.connect(self.project_memo)
         self.ui.actionAI_Prompts.triggered.connect(self.ai_prompts)
+        self.ui.actionAI_Token_usage.triggered.connect(self.ai_token_usage)
         self.ui.actionAI_Chat.triggered.connect(self.ai_go_chat)
         self.ui.actionAI_Search_and_Coding.triggered.connect(self.ai_go_search)
         # Help menu
@@ -3638,6 +3640,15 @@ Click "Yes" to start now.')
     def ai_prompts(self):
         """ Action triggered by AI Prompts menu item."""
         DialogAiEditPrompts(self.app).exec()
+
+    def ai_token_usage(self):
+        """ Action triggered by AI Token usage menu item.
+        Shows how many AI tokens have been consumed in the current project."""
+        if self.app.conn is None:
+            Message(self.app, _('AI Token Usage'), _('Please open a project first.')).exec()
+            return
+        ui = DialogAiTokenUsage(self.app, self)
+        ui.exec()
 
     def ai_go_chat(self):
         """ Action triggered by AI Chat menu item."""
