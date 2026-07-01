@@ -235,6 +235,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
     <addaction name="actionAI_Rebuild_internal_memory"/>
     <addaction name="actionAI_Edit_Project_Memo"/>
     <addaction name="actionAI_Prompts"/>
+    <addaction name="actionAI_Token_usage"/>
     <addaction name="separator"/>
     <addaction name="actionAI_Chat"/>
     <addaction name="actionAI_Search_and_Coding"/>
@@ -597,6 +598,14 @@ li.checked::marker { content: &quot;\2612&quot;; }
   <action name="actionAI_Prompts">
    <property name="text">
     <string>Prompt library</string>
+   </property>
+  </action>
+  <action name="actionAI_Token_usage">
+   <property name="text">
+    <string>Token usage</string>
+   </property>
+   <property name="toolTip">
+    <string>Show how many AI tokens have been consumed</string>
    </property>
   </action>
   <action name="actionCode_organiser">
