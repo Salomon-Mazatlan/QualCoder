@@ -40,6 +40,8 @@ from langchain_core.messages.system import SystemMessage
 from langchain_core.documents.base import Document  # Unused
 from .ai_async_worker import Worker
 from .ai_vectorstore import AiVectorstore
+from .ai_usage import (AiUsageTracker, TASK_CHAT, TASK_SEARCH_DESCRIPTIONS,
+                       TASK_SEARCH_ANALYZE)
 from .helpers import Message
 from .error_dlg import qt_exception_hook
 from .html_parser import html_to_text
@@ -443,6 +445,7 @@ class AiLLM():
         self.parent_text_edit = parent_text_edit
         self.threadpool = QtCore.QThreadPool()
         self.threadpool.setMaxThreadCount(1)
+        self.usage_tracker = AiUsageTracker(self.app)
         self.sources_vectorstore = AiVectorstore(self.app, self.parent_text_edit, self.sources_collection)
 
     # Icons (https://pictogrammers.com/library/mdi/)
@@ -711,7 +714,7 @@ class AiLLM():
     def _ai_async_abort_button_clicked(self):
         self.ai_async_is_canceled = True
     
-    def ai_async_stream(self, llm, messages, result_callback=None, progress_callback=None, streaming_callback=None, error_callback=None):       
+    def ai_async_stream(self, llm, messages, result_callback=None, progress_callback=None, streaming_callback=None, error_callback=None, task=TASK_CHAT):       
         """Calls the LLM in a background thread and streams back the results 
 
         Args:
@@ -721,13 +724,14 @@ class AiLLM():
             progress_callback (optional): Defaults to None.
             streaming_callback (optional): Defaults to None.
             error_callback (optional): Defaults to None.
+            task (optional): label used for the token usage tracking. Defaults to TASK_CHAT.
         """
         # start async worker 
         self.ai_async_is_finished = False
         self.ai_async_is_errored = False
         self.ai_async_progress_msg = ''
         self.ai_async_progress_count = -1
-        worker = Worker(self._ai_async_stream, llm=llm, messages=messages)
+        worker = Worker(self._ai_async_stream, llm=llm, messages=messages, task=task)
         if result_callback is not None: 
             worker.signals.result.connect(result_callback)
         if progress_callback is not None:
@@ -740,22 +744,66 @@ class AiLLM():
             worker.signals.error.connect(self._ai_async_error)
         self.threadpool.start(worker)
 
-    def _ai_async_stream(self, signals, llm, messages):
+    def _ai_async_stream(self, signals, llm, messages, task=TASK_CHAT):
         self.ai_async_is_canceled = False
         self.ai_streaming_output = ''
-        for chunk in llm.stream(messages):
-            if self.ai_async_is_canceled:
-                break  # cancel the streaming
+        # 'full_msg' accumulates the streamed chunks so we can read the real
+        # token usage from the final message (when the provider reports it).
+        self.ai_async_full_msg = None
+        track_usage = self.app.settings.get('ai_track_token_usage', 'True') != 'False'
+
+        def _consume(stream_usage):
+            self.ai_async_full_msg = None
+            if stream_usage:
+                # 'stream_usage=True' asks OpenAI compatible providers to add a
+                # final chunk with the token usage (stream_options.include_usage).
+                try:
+                    stream_iter = llm.stream(messages, stream_usage=True)
+                except TypeError:
+                    stream_iter = llm.stream(messages)
             else:
-                self.ai_streaming_output += chunk.content
-                if signals is not None:
-                    if signals.streaming is not None:
-                        signals.streaming.emit(str(chunk.content))
-                    if signals.progress is not None:
-                        self.ai_async_progress_count += len(chunk.content)
-                        signals.progress.emit(str(self.ai_async_progress_count))
+                stream_iter = llm.stream(messages)
+            for chunk in stream_iter:
+                if self.ai_async_is_canceled:
+                    break  # cancel the streaming
+                else:
+                    self.ai_streaming_output += chunk.content
+                    try:
+                        if self.ai_async_full_msg is None:
+                            self.ai_async_full_msg = chunk
+                        else:
+                            self.ai_async_full_msg = self.ai_async_full_msg + chunk
+                    except Exception:
+                        self.ai_async_full_msg = None
+                    if signals is not None:
+                        if signals.streaming is not None:
+                            signals.streaming.emit(str(chunk.content))
+                        if signals.progress is not None:
+                            self.ai_async_progress_count += len(chunk.content)
+                            signals.progress.emit(str(self.ai_async_progress_count))
+
+        if track_usage:
+            try:
+                _consume(stream_usage=True)
+            except Exception:
+                # Some providers reject the usage option. Retry once with a plain
+                # stream, but only if nothing has been streamed yet (safe).
+                if self.ai_streaming_output == '':
+                    _consume(stream_usage=False)
+                else:
+                    raise
+        else:
+            _consume(stream_usage=False)
+
         res = self.ai_streaming_output
         self.ai_streaming_output = ''
+        # Record the token usage (never lets a tracking error break the AI call)
+        try:
+            self.usage_tracker.record(llm, messages, res, task=task,
+                                      response=self.ai_async_full_msg)
+        except Exception as e:
+            logger.debug('AI usage tracking failed: ' + str(e))
+        self.ai_async_full_msg = None
         return res
 
     def ai_async_query(self, func, result_callback, *args, **kwargs):        
@@ -896,6 +944,12 @@ class AiLLM():
             logger.debug(e)
             res = self.large_llm.invoke(code_descriptions_prompt, config=config)            
         logger.debug(str(res.content))
+        # Record AI token usage for this call
+        try:
+            self.usage_tracker.record(self.large_llm, code_descriptions_prompt,
+                                      str(res.content), task=TASK_SEARCH_DESCRIPTIONS, response=res)
+        except Exception as e:
+            logger.debug('AI usage tracking failed: ' + str(e))
         res.content = strip_think_blocks(res.content)
         code_descriptions = list(json_repair.loads(str(res.content))['descriptions'])
         code_descriptions.insert(0, code_name) # insert the original as well
@@ -1060,6 +1114,12 @@ class AiLLM():
             # Fallback for providers/models that do not support the selected response format.
             logger.debug(e)
             res = self.large_llm.invoke(f'{prompt}', config=config)                  
+        # Record AI token usage for this call
+        try:
+            self.usage_tracker.record(self.large_llm, f'{prompt}', str(res.content),
+                                      task=TASK_SEARCH_ANALYZE, response=res)
+        except Exception as e:
+            logger.debug('AI usage tracking failed: ' + str(e))
         res.content = strip_think_blocks(res.content)
         res_json = json_repair.loads(str(res.content))
         
