@@ -121,8 +121,8 @@ class Ris:
                     ref['issue'] = tpl[2]
             if volume and issue:
                 ref['journal_vol_issue'] += f"{volume} ({issue})"
-            # Without these defaults, a reference lacking title or type broke get_data,
-            # tooltips and the manager's sorts (KeyError on ref['TI'] / ref['TY'])
+            # Without these defaults, a reference lacking title or type broke get_data, tooltips
+            # and the manager's sorts (KeyError on ref['TI'] / ref['TY']).
             if 'TI' not in ref:
                 ref['TI'] = ""
             if 'TY' not in ref:
@@ -334,14 +334,14 @@ class RisImport:
         self.app = app
         self.parent_text_edit = parent_text_edit
         self.refs_dialog = refs_dialog
-        self.imported_filepath = ""  # ruta del .ris elegido, para resolver adjuntos relativos
+        self.imported_filepath = ""
         response = QtWidgets.QFileDialog.getOpenFileNames(None, _('Select RIS or NBIB references file'),
                                                           self.app.settings['directory'],
-                                                          "(*.ris *.RIS *.nbib *.txt)")  # Native OS dialog.
+                                                          "(*.ris *.RIS *.nbib *.txt)")  # native OS dialog
         imports = response[0]
         if imports:
             file_path = imports[0]
-            self.imported_filepath = file_path  # Original path. 
+            self.imported_filepath = file_path  # Original path.
             if file_path.endswith(".nbib"):
                 file_path = self.nbib_to_ris(file_path)
             self.create_file_attributes()
@@ -389,20 +389,19 @@ class RisImport:
                     self.app.conn.commit()
 
     def import_ris_file(self, filepath):
-        """ 
-        Reads the .ris/.nbib file, builds the candidate reference list (with reference and attachment
-        duplicate status) and opens the preview dialog to choose which to import. Inserts only the
-        chosen ones and links all their PDF/EPUB attachments (if requested). A reference may have
-        several attachments (e.g. PDF and EPUB, or two L1 lines); all of them are imported.
-
-        List tags: 'A1', 'A2', 'A3', 'A4', 'AU', 'KW', 'N1'  # authors, KW keywords, N1 Notes
-        longtag is the extended wording of a tag
-        tag_keys is the dictionary of 2 char short tag keys (e.g. AU) and the longtag wording
+        """
+        Reads the .ris/.nbib file, builds the candidate reference list
+        (with reference and attachment duplicate status) and opens the preview dialog to choose
+        which to import. Inserts only the chosen ones and links all their PDF/EPUB attachments
+        (if requested). A reference may have several attachments (e.g. PDF and EPUB, or two L1
+        lines); all of them are imported. List tags: 'A1', 'A2', 'A3', 'A4', 'AU', 'KW', 'N1' #
+        authors, KW keywords, N1 Notes longtag is the extended wording of a tag tag_keys is the
+        dictionary of 2 char short tag keys (e.g. AU) and the longtag wording
         """
 
         # List tags: rispy defaults plus the link tags (attachments), so multiple
-        # attachments per reference are captured as a list instead of rispy keeping only the
-        # first one.
+        # attachments per reference are captured as a list instead of rispy keeping only the first
+        # one.
         default_list_tags = getattr(rispy.RisParser, "DEFAULT_LIST_TAGS",
                                     ['A1', 'A2', 'A3', 'A4', 'AU', 'KW', 'N1', 'UR'])
         list_tags = list(default_list_tags) + list(ATTACHMENT_TAGS)
@@ -426,7 +425,7 @@ class RisImport:
         seen_sigs = set()
         seen_attach = set()
         rows = []
-        candidates = []  # Parallel: (triples, [paths]).
+        candidates = []  # paralelo a rows: Parallel: (triples, [paths]).
         any_attachment = False
         unresolved = 0  # Cited but missing.
 
@@ -435,17 +434,17 @@ class RisImport:
                 del entry['id']
             except KeyError:
                 pass
-            triples = []        # (tag, longtag, value) For the ris table.
+            triples = []  # For the ris table.
             attach_values = []  # Individual attachment values.
             for longtag in entry:
                 raw = entry[longtag]
                 tag = longtag_to_tag.get(longtag)
                 if not tag:
-                    continue  
-                # Collect each attachment separately (do not join). Detection is by link TAG, not by
-                # long name: Zotero writes PDFs in L1 and EPUBs in L4, whose long name is 'figure'.
-                # No extension filter here either: the raw value may carry spaces, description
-                # suffixes or URL escapes.
+                    continue  # Unknown tag: skip the field.
+                # Collect each attachment separately (do not join). Detection is by link TAG, not
+                # by long name: Zotero writes PDFs in L1 and EPUBs in L4, whose long name is
+                # 'figure'. No extension filter here either: the raw value may carry spaces,
+                # description suffixes or URL escapes.
                 if tag in ATTACHMENT_TAGS:
                     for v in (raw if isinstance(raw, list) else [raw]):
                         if isinstance(v, str) and v.strip():
@@ -463,7 +462,7 @@ class RisImport:
                 seen_sigs.add(sig)
             if not self.refs_dialog and ref_dup:
                 continue  # No dialog: skip.
-            # all attachments of the reference (PDF and EPUB), without repeating paths.
+            # Resolve all attachments of the reference (PDF and EPUB), without repeating paths.
             attach_paths = []
             if self.refs_dialog:
                 for v in attach_values:
@@ -477,7 +476,7 @@ class RisImport:
             if attach_paths:
                 any_attachment = True
                 names = [os.path.basename(p.replace("\\", "/")) for p in attach_paths]
-                # Etiqueta: el primero, y "(+N)" si hay mas. Label: first name, plus "(+N)" if more.
+                # Label: first name, plus "(+N)" if more
                 attach_label = names[0] if len(names) == 1 else f"{names[0]} (+{len(names) - 1})"
                 for nm in names:
                     low = nm.lower()
@@ -521,9 +520,8 @@ class RisImport:
         if self.refs_dialog:
             self.refs_dialog.get_data()
 
-        # 
-        # Link all attachments of each chosen reference if
-        # requested; repeated names become numbered copies.
+        # Link all attachments of each chosen reference if requested; repeated names become
+        # numbered copies.
         linked = 0
         failed = 0  # Attachments that could not be read.
         if want_attachments and self.refs_dialog:
@@ -547,8 +545,8 @@ class RisImport:
                             self.refs_dialog.link_reference_to_files(risid, fid)
                             linked += 1
                 finally:
-                    # No autoClose: close it, in a finally so a
-                    # failure midway does not leave the bar stuck on screen.
+                    # No autoClose: close it, in a finally so a failure midway does not leave the
+                    # bar stuck on screen.
                     progress.close()
                     progress.deleteLater()
             self.refs_dialog.get_data()
@@ -565,7 +563,7 @@ class RisImport:
         self.parent_text_edit.append(msg + "\n========")
 
     def project_signatures(self):
-        """ 
+        """
         Signatures already in the project.
         """
 
@@ -575,12 +573,11 @@ class RisImport:
 
     def entry_exists(self, entry):
         """
-        Check if this entry already exists in the project.
-
-        Signature based detection (title|year|authors), tolerant to accents, punctuation, case, and
-        to the imported reference carrying more or fewer fields than the stored one. The previous
-        version required ALL fields to match and ran one query per field, so a single differing
-        datum (or an added DOI) made it look new. A reference without a title has no signature and
+        Check if this entry already exists in the project. Signature based detection
+        (title|year|authors), tolerant to accents, punctuation, case, and to the imported
+        reference carrying more or fewer fields than the stored one. The previous version
+        required ALL fields to match and ran one query per field, so a single differing datum
+        (or an added DOI) made it look new. A reference without a title has no signature and
         counts as new.
         Args:
             entry: dictionary of longtag and value, as returned by rispy
