@@ -1988,6 +1988,18 @@ class ViewGraph(QDialog):
                 if top_node is None:
                     continue
                 model = self.get_refined_model(top_node, model)
+                # (sub-codes): expand supercid descendants; get_refined_model only walks supercatid
+                included = {m['cid'] for m in model if m.get('cid') is not None}
+                frontier = list(included)
+                guard = 0
+                while frontier and guard < 2000:
+                    guard += 1
+                    current = frontier.pop()
+                    for code in codes:
+                        if code.get('supercid') == current and code['cid'] not in included:
+                            included.add(code['cid'])
+                            model.append(code)
+                            frontier.append(code['cid'])
                 self.list_graph(model)
             elif kind == 'code':
                 # the code plus its whole sub-code descendancy (supercid chains)
@@ -8821,18 +8833,42 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         scene.addItem(line_item)
         scene.update()
 
-    # import the child codes of this category that are not yet in the scene
+    # import the child codes of this category not yet in the scene,
+    # including the sub-code descendancy (supercid chains)
     def add_child_codes_to_scene(self):
         catid = self.code_or_cat.get('catid')
         if catid is None:
             return
         cur = self.app.conn.cursor()
-        cur.execute("select cid, name, color, ifnull(memo,'') from code_name where catid=?", [catid])
-        res = cur.fetchall()
+        cur.execute("select cid, name, color, ifnull(memo,''), catid, supercid from code_name")
+        all_codes = [{'cid': r[0], 'name': r[1], 'color': r[2], 'memo': r[3],
+                      'catid': r[4], 'supercid': r[5]} for r in cur.fetchall()]
+        by_cid = {c['cid']: c for c in all_codes}
+        # direct codes of this category
+        branch = [c for c in all_codes if c['catid'] == catid and not c.get('supercid')]
+        depth_of = {c['cid']: 0 for c in branch}
+        # breadth-first descent of supercid chains, parents before children
+        included = {c['cid'] for c in branch}
+        frontier = [c['cid'] for c in branch]
+        guard = 0
+        while frontier and guard < 2000:
+            guard += 1
+            current = frontier.pop(0)
+            for code in all_codes:
+                if code.get('supercid') == current and code['cid'] not in included:
+                    included.add(code['cid'])
+                    depth_of[code['cid']] = depth_of.get(current, 0) + 1
+                    branch.append(code)
+                    frontier.append(code['cid'])
         candidates = []
-        for r in res:
-            if self._find_node_in_scene(cid=r[0]) is None:
-                candidates.append({'cid': r[0], 'name': r[1], 'color': r[2], 'memo': r[3]})
+        for c in branch:
+            if self._find_node_in_scene(cid=c['cid']) is None:
+                # 'name' indented for the picker; 'realname' used on the node
+                candidates.append({'cid': c['cid'], 'color': c['color'], 'memo': c['memo'],
+                                   'catid': c['catid'], 'supercid': c.get('supercid'),
+                                   'depth': depth_of.get(c['cid'], 0),
+                                   'name': "    " * depth_of.get(c['cid'], 0) + c['name'],
+                                   'realname': c['name']})
         if not candidates:
             Message(self.app, _("No codes"),
                     _("All child codes of this category are already in the graph.")).exec()
@@ -8847,23 +8883,49 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if scene is not None and getattr(scene, 'parent', None) is not None:
             if hasattr(scene.parent, '_save_undo_state'):
                 scene.parent._save_undo_state()
+
+        def nearest_parent_node(supercid):
+            """ Closest supercid ancestor in the scene, else this category node. """
+            guard_up = 0
+            while supercid is not None and guard_up < 100:
+                guard_up += 1
+                node = self._find_node_in_scene(cid=supercid)
+                if node is not None and node.isVisible():
+                    return node
+                supercid = by_cid.get(supercid, {}).get('supercid')
+            return self
+
+        # parents first so sub-codes can link to their freshly added parent code
+        selected = sorted(selected, key=lambda s: s.get('depth', 0))
+        top_level = [s for s in selected if not s.get('supercid')]
         radius = 200
-        angle_step = (2 * math.pi) / max(1, len(selected))
-        for i, s in enumerate(selected):
+        angle_step = (2 * math.pi) / max(1, len(top_level))
+        top_i = 0
+        children_placed = {}  # parent cid -> count, to fan out sub-codes
+        for s in selected:
             if self._find_node_in_scene(cid=s['cid']) is not None:
                 continue
-            angle = i * angle_step
-            cx = self.pos().x() + radius * math.cos(angle)
-            cy = self.pos().y() + radius * math.sin(angle)
-            # 'supercid': None for dict uniformity; the next reactive sync fills the
-            # real value from the database (sub-codes).
-            code_data = {'name': s['name'], 'supercatid': None, 'catid': catid, 'cid': s['cid'],
-                         'supercid': None,
-                         'x': cx, 'y': cy, 'color': s['color'], 'memo': s['memo'], 'child_names': []}
+            supercid = s.get('supercid')
+            if not supercid:
+                angle = top_i * angle_step
+                top_i += 1
+                cx = self.pos().x() + radius * math.cos(angle)
+                cy = self.pos().y() + radius * math.sin(angle)
+            else:
+                parent_node = nearest_parent_node(supercid)
+                k = children_placed.get(supercid, 0)
+                children_placed[supercid] = k + 1
+                cx = parent_node.pos().x() + 160
+                cy = parent_node.pos().y() + 40 + k * 40
+            code_data = {'name': s['realname'], 'supercatid': None, 'catid': s['catid'],
+                         'cid': s['cid'], 'supercid': supercid,
+                         'x': cx, 'y': cy, 'color': s['color'], 'memo': s['memo'],
+                         'child_names': []}
             new_node = TextGraphicsItem(self.app, code_data)
             scene.addItem(new_node)
             # Hierarchy convention: child -> parent
-            line_item = LinkGraphicsItem(new_node, self, 2, "solid", "gray", True)
+            parent_node = nearest_parent_node(supercid) if supercid else self
+            line_item = LinkGraphicsItem(new_node, parent_node, 2, "solid", "gray", True)
             scene.addItem(line_item)
         scene.update()
 
