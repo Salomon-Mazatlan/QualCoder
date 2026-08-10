@@ -319,6 +319,7 @@ class CodeTreeController(QtCore.QObject):
         action_move_code = None
         action_move_multi_codes = None
         action_merge_code_into_code = None
+        action_duplicate_code = None
         if selected is not None and selected.text(1)[0:3] == 'cid':
             action_color = modify_menu.addAction(_("Change code color F5"))
             if self.coded_files_callback is not None:
@@ -326,6 +327,7 @@ class CodeTreeController(QtCore.QObject):
             action_move_code = modify_menu.addAction(_("Move code to F6"))
             action_move_multi_codes = modify_menu.addAction(_("Move multiple codes F7"))
             action_merge_code_into_code = modify_menu.addAction(_("Merge code into code F8"))
+            action_duplicate_code = modify_menu.addAction(_("Duplicate code"))
         action_find_code = None
         if self.find_code_callback is not None:
             action_find_code = menu.addAction(_("Find code"))
@@ -407,6 +409,9 @@ class CodeTreeController(QtCore.QObject):
             return
         if action == action_merge_code_into_code and selected is not None:
             self.merge_code_into_code(selected)
+            return
+        if action == action_duplicate_code and selected is not None:
+            self.duplicate_code(selected)
             return
         if action == action_expand_collapse:
             expand_toggle = not selected.isExpanded()
@@ -762,6 +767,79 @@ class CodeTreeController(QtCore.QObject):
             return False
         self.codes_changed.emit(["code_name"])
         return True
+
+    def duplicate_code(self, selected: QtWidgets.QTreeWidgetItem):
+        """
+        Copy a code (same category/parent, colour, memo) with a numbered unique name.
+        The duplicate belongs to the CURRENT coder. Asks whether to also copy the coded
+        segments (they keep owner and date; only the cid changes).
+        Args:
+            selected : QTreeWidgetItem of the code to duplicate.
+        """
+
+        cid = int(selected.text(1).split(":")[1])
+        original = next((code for code in self.codes if code['cid'] == cid), None)
+        if original is None:
+            return
+        base_name = original['name']
+        msg_box = QtWidgets.QMessageBox(self.tree)
+        msg_box.setWindowTitle(_("Duplicate code"))
+        msg_box.setText(_("Duplicate code: ") + base_name)
+        msg_box.setInformativeText(_("Also copy the coded segments to the duplicate?"))
+        msg_box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes |
+                                   QtWidgets.QMessageBox.StandardButton.No |
+                                   QtWidgets.QMessageBox.StandardButton.Cancel)
+        msg_box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+        answer = msg_box.exec()
+        if answer == QtWidgets.QMessageBox.StandardButton.Cancel:
+            return
+        copy_segments = answer == QtWidgets.QMessageBox.StandardButton.Yes
+        item = {'memo': original.get('memo', "") or "",
+                'owner': self.app.settings['codername'],
+                'date': datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                'catid': original.get('catid'), 'color': original.get('color'),
+                'supercid': original.get('supercid')}
+        cur = self.app.conn.cursor()
+        # Code names are unique project-wide: probe numbered variants until one is free.
+        suffix = 2
+        final_name = f"{base_name} ({suffix})"
+        while True:
+            try:
+                cur.execute("insert into code_name (name,memo,owner,date,catid,color,supercid) values(?,?,?,?,?,?,?)",
+                            (final_name, item['memo'], item['owner'], item['date'], item['catid'],
+                             item['color'], item['supercid']))
+                break
+            except sqlite3.IntegrityError:
+                suffix += 1
+                final_name = f"{base_name} ({suffix})"
+                if suffix > 1000:  # unreachable in practice; avoids an endless loop
+                    logger.warning(f"duplicate_code: no free name found for {base_name}")
+                    return
+        cur.execute("select last_insert_rowid()")
+        new_cid = cur.fetchone()[0]
+        changed_tables = ["code_name"]
+        log_line = _("Duplicated code: ") + f"{base_name} -> {final_name}"
+        if copy_segments:
+            # Columns via pragma (schema-proof); PK skipped, cid replaced.
+            copied = 0
+            for table, pk in (("code_text", "ctid"), ("code_av", "avid"), ("code_image", "imid")):
+                cols = [row[1] for row in cur.execute(f"pragma table_info({table})").fetchall()
+                        if row[1] != pk]
+                if "cid" not in cols:
+                    continue
+                col_list = ",".join(cols)
+                select_list = ",".join("?" if c == "cid" else c for c in cols)
+                cur.execute(f"insert into {table} ({col_list}) select {select_list} from {table} where cid=?",
+                            (new_cid, cid))
+                if cur.rowcount > 0:
+                    copied += cur.rowcount
+                    changed_tables.append(table)
+            if copied:
+                log_line += f" ({copied} " + _("coded segments copied") + ")"
+        self.app.conn.commit()
+        self.app.delete_backup = False
+        self.parent_textEdit.append(log_line)
+        self.codes_changed.emit(changed_tables)
 
     def add_category(self, supercatid:int|None=None):
         """
