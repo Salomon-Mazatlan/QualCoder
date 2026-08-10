@@ -70,11 +70,8 @@ ZOOM_MIN, ZOOM_MAX = 0.5, 3.0
 
 
 def _page_rotation_transform(w, h, rot):
-    """ View-only page rotation as an item transform: maps canonical (0,0,w,h) to
-    a footprint at (0,0), (h,w) for 90/270. Painting stays canonical; stored
-    coordinates and the file are never touched.
-    Args:
-        w, h: canonical page size in PDF points. rot: 0/90/180/270 clockwise.
+    """
+    View-only rotation as an item transform; painting and stored data stay canonical.
     """
 
     t = QtGui.QTransform()
@@ -917,8 +914,7 @@ class PdfView(QtWidgets.QGraphicsView):
         self.items_ = []
         self.page_tops = []
         self.page_sizes = []
-        # View rotation per page {page: deg}; bound per file by the dialog and
-        # rebound by the loader (not reset in clear_document).
+        # View rotation per page {page: deg}; rebound per file by the loader.
         self.page_rotations = {}
         self.max_page_width = 595.0
         self.zoom = 1.0
@@ -988,8 +984,9 @@ class PdfView(QtWidgets.QGraphicsView):
             self._apply_single_page(0)
 
     def display_size(self, idx):
-        """ Page footprint in the scene, honouring the view rotation: (h, w) when
-        the page is rotated 90 or 270 degrees, (w, h) otherwise. """
+        """
+        Page footprint honouring the view rotation: (h, w) for 90/270.
+        """
 
         w, h = self.page_sizes[idx]
         if self.page_rotations.get(idx, 0) in (90, 270):
@@ -997,8 +994,9 @@ class PdfView(QtWidgets.QGraphicsView):
         return w, h
 
     def _layout_pages(self):
-        """ Stack pages vertically applying each view rotation as the item
-        transform; re-runs after a rotation without recreating items. """
+        """
+        Stack pages applying each view rotation; re-runs without recreating items.
+        """
 
         if not self.items_:
             return
@@ -1016,8 +1014,9 @@ class PdfView(QtWidgets.QGraphicsView):
         self._full_scene_height = y
 
     def rotate_page(self, idx, delta=90):
-        """ Rotate the view of page idx by delta degrees and relayout; the pixmap
-        cache stays valid (rendering is canonical). """
+        """
+        Rotate the view of page idx by delta degrees and relayout.
+        """
 
         if not self.items_ or not 0 <= idx < len(self.items_):
             return
@@ -4469,7 +4468,9 @@ class DialogCodePdf(QtWidgets.QWidget):
         self.view.set_zoom(self.view.zoom / 1.2)
 
     def update_rotate_button_state(self):
-        """ Rotate buttons enabled only in single-page view mode. """
+        """
+        Rotate buttons enabled only in single-page view mode.
+        """
 
         for name in ('pushButton_rotate_page', 'pushButton_rotate_page_ccw'):
             btn = getattr(self.ui, name, None)
@@ -4477,20 +4478,22 @@ class DialogCodePdf(QtWidgets.QWidget):
                 btn.setEnabled(self.view.single_page_mode)
 
     def rotate_current_page(self):
-        """ Rotate the current page 90 deg clockwise (view only, single-page mode;
-        Van's request). File, text and coding coordinates untouched. """
+        """
+        Rotate the current page 90 deg clockwise (view only, single-page mode).
+        """
 
         self._rotate_current(90)
 
     def rotate_current_page_ccw(self):
-        """ Rotate the current page 90 deg counter-clockwise; same rules. """
+        """
+        Rotate the current page 90 deg counter-clockwise.
+        """
 
         self._rotate_current(-90)
 
     def _rotate_current(self, delta):
-        """ Shared rotation body: only in single-page view mode.
-        Args:
-            delta: degrees, +90 clockwise or -90 counter-clockwise.
+        """
+        Shared rotation body; only in single-page view mode.
         """
 
         if not self.view.items_ or not self.view.single_page_mode:
