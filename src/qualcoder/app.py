@@ -173,9 +173,7 @@ class App(object):
                 proj_paths.append(proj_path)
                 result.append(i)
 
-        # Write the latest projects file in order of most recently opened and without duplicate projects.
-        # Atomic write (temp file + os.replace): a crash or forced kill mid-write can
-        # never truncate the file, so the auto-open of the last project survives.
+        # Atomic rewrite (temp + os.replace): a kill mid-write cannot truncate it.
         try:
             tmp_path = self.persist_path + ".tmp"
             with open(tmp_path, 'w', encoding='utf-8') as f:
