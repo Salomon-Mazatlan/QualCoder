@@ -117,6 +117,9 @@ class DialogSelectItems(QtWidgets.QDialog):
         else:
             self.ui.listView.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.ui.listView.doubleClicked.connect(self.accept)
+        if self.with_checkboxes:
+            # Indicator clicks toggle the tick without touching the selection.
+            self.ui.listView.viewport().installEventFilter(self)
         self.model = None
         self.fill_list()
         self.ui.comboBox.currentIndexChanged.connect(self.fill_list)
@@ -138,18 +141,71 @@ class DialogSelectItems(QtWidgets.QDialog):
 
         self.data_refined = copy.copy(self.data)
         grouper = self.ui.comboBox.currentText()
-        if not self.groups or grouper == "All":
-            self.model = ListModel(self.data_refined, checkable=self.with_checkboxes,
-                                   checked_keys=self._checked_keys, key_func=self._item_key)
-            self.ui.listView.setModel(self.model)
-            self._apply_preselection()
-            return
-
-        self.data_refined = [d for d in self.data if d['group'] == grouper]
+        if self.groups and grouper != "All":
+            self.data_refined = [d for d in self.data if d['group'] == grouper]
         self.model = ListModel(self.data_refined, checkable=self.with_checkboxes,
                                checked_keys=self._checked_keys, key_func=self._item_key)
         self.ui.listView.setModel(self.model)
+        if self.with_checkboxes:
+            # setModel replaces the selection model: reconnect the sync each rebuild.
+            selection_model = self.ui.listView.selectionModel()
+            if selection_model is not None:
+                selection_model.selectionChanged.connect(self._sync_checks_with_selection)
         self._apply_preselection()
+
+    def _sync_checks_with_selection(self, selected, deselected):
+        """ Ticks follow the selection (click/drag/Ctrl/Shift); preselected rows
+        survive plain clicks. """
+
+        if self.model is None:
+            return
+        for index in selected.indexes():
+            self.model.setData(index, QtCore.Qt.CheckState.Checked,
+                               QtCore.Qt.ItemDataRole.CheckStateRole)
+        for index in deselected.indexes():
+            self.model.setData(index, QtCore.Qt.CheckState.Unchecked,
+                               QtCore.Qt.ItemDataRole.CheckStateRole)
+
+    def eventFilter(self, obj, event):
+        """ Indicator clicks toggle the tick only (press/release swallowed);
+        elsewhere the normal selection applies. """
+
+        if self.with_checkboxes and obj is self.ui.listView.viewport() and \
+                event.type() in (QtCore.QEvent.Type.MouseButtonPress,
+                                 QtCore.QEvent.Type.MouseButtonDblClick,
+                                 QtCore.QEvent.Type.MouseButtonRelease):
+            pos = event.position().toPoint()
+            index = self.ui.listView.indexAt(pos)
+            if index.isValid() and self._point_on_check_indicator(index, pos):
+                if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                    state = self.model.data(index, QtCore.Qt.ItemDataRole.CheckStateRole)
+                    new_state = QtCore.Qt.CheckState.Unchecked \
+                        if state == QtCore.Qt.CheckState.Checked else QtCore.Qt.CheckState.Checked
+                    self.model.setData(index, new_state, QtCore.Qt.ItemDataRole.CheckStateRole)
+                return True  # Swallow press, double click and release over the indicator
+        return super().eventFilter(obj, event)
+
+    def _point_on_check_indicator(self, index, pos) -> bool:
+        """ True if the viewport point is over the item's check indicator. """
+
+        view = self.ui.listView
+        style = view.style()
+        try:
+            opt = QtWidgets.QStyleOptionViewItem()
+            opt.initFrom(view.viewport())
+            opt.rect = view.visualRect(index)
+            opt.features |= QtWidgets.QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+            rect = style.subElementRect(
+                QtWidgets.QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, view.viewport())
+            if rect.isValid() and rect.width() > 0:
+                return rect.contains(pos)
+        except Exception:  # pragma: no cover - styles that do not support the query
+            pass
+        # Fallback: indicator width plus margins from the item's left edge.
+        item_rect = view.visualRect(index)
+        indicator = style.pixelMetric(QtWidgets.QStyle.PixelMetric.PM_IndicatorWidth, None, view)
+        margin = style.pixelMetric(QtWidgets.QStyle.PixelMetric.PM_FocusFrameHMargin, None, view) * 2 + 4
+        return pos.x() <= item_rect.left() + indicator + margin
 
     def _apply_preselection(self):
         """ Show the caller's current selection so it can be checked and adjusted.
