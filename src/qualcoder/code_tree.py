@@ -770,11 +770,8 @@ class CodeTreeController(QtCore.QObject):
 
     def duplicate_code(self, selected: QtWidgets.QTreeWidgetItem):
         """
-        Copy a code (same category/parent, colour, memo) with a numbered unique name.
-        The duplicate belongs to the CURRENT coder. Asks whether to also copy the coded
-        segments (they keep owner and date; only the cid changes).
-        Args:
-            selected : QTreeWidgetItem of the code to duplicate.
+        Copy a code with a numbered unique name; the duplicate belongs to the
+        current coder. Asks whether to also copy the coded segments.
         """
 
         cid = int(selected.text(1).split(":")[1])
