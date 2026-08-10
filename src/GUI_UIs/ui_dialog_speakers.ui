@@ -53,6 +53,28 @@
       </widget>
      </item>
      <item>
+      <widget class="QPushButton" name="pushButton_scan">
+       <property name="minimumSize">
+        <size>
+         <width>30</width>
+         <height>30</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>30</width>
+         <height>30</height>
+        </size>
+       </property>
+       <property name="toolTip">
+        <string>Detect speakers: scan the selected files with the checked identifiers. Detection only runs when you press this button, so changing identifiers or files with many documents does not freeze the dialog. The scan shows progress and can be cancelled.</string>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="pushButton_select_files">
        <property name="toolTip">
         <string>Choose which text files to scan for speakers. You can mark speakers across several files at once.</string>
@@ -137,17 +159,47 @@
     </layout>
    </item>
    <item>
-    <widget class="QCheckBox" name="checkBox_include_name">
-     <property name="toolTip">
-      <string>Code the whole turn including the speaker label. Uncheck to code only the response text, without the name.</string>
-     </property>
-     <property name="text">
-      <string>Include speaker name</string>
-     </property>
-     <property name="checked">
-      <bool>false</bool>
-     </property>
-    </widget>
+    <layout class="QHBoxLayout" name="horizontalLayout_checks">
+     <item>
+      <widget class="QCheckBox" name="checkBox_include_name">
+       <property name="toolTip">
+        <string>Code the whole turn including the speaker label. Uncheck to code only the response text, without the name.</string>
+       </property>
+       <property name="text">
+        <string>Include speaker name</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="checkBox_filter_timestamps">
+       <property name="toolTip">
+        <string>Ignore time stamps during detection, so they are not mistaken for speaker names. Covers the transcript formats used in Code A/V: [hh:mm:ss] [mm:ss] [hh.mm.ss] [mm.ss] {hh:mm:ss} #hh:mm:ss.sss#, subtitle arrows in SRT (hh:mm:ss,sss --&gt; hh:mm:ss,sss) and WebVTT (hh:mm:ss.sss --&gt; hh:mm:ss.sss, hours optional), and bare hh:mm:ss / mm:ss times.</string>
+       </property>
+       <property name="text">
+        <string>Filter time stamps</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_checks">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>10</width>
+         <height>10</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
    </item>
    <item>
     <widget class="QTableWidget" name="tableWidget">
@@ -155,7 +207,7 @@
       <string>Doubleclick a &quot;code as&quot; name to edit</string>
      </property>
      <property name="horizontalScrollBarPolicy">
-      <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
+      <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
      </property>
      <property name="selectionBehavior">
       <enum>QAbstractItemView::SelectionBehavior::SelectItems</enum>

@@ -659,6 +659,38 @@ odt report: report of the coded text and areas.</string>
        <string/>
       </property>
      </widget>
+     <widget class="QPushButton" name="pushButton_rotate_page_ccw">
+      <property name="geometry">
+       <rect>
+        <x>830</x>
+        <y>0</y>
+        <width>28</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Rotate the current page 90° counter-clockwise (view only). Available in single-page view mode. Switching back to whole-document view clears the rotations. The PDF file and the coded positions are not modified.</string>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+     </widget>
+     <widget class="QPushButton" name="pushButton_rotate_page">
+      <property name="geometry">
+       <rect>
+        <x>860</x>
+        <y>0</y>
+        <width>28</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Rotate the current page 90° clockwise (view only). Available in single-page view mode; useful for sideways tables. Switching back to whole-document view clears the rotations. The PDF file and the coded positions are not modified.</string>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+     </widget>
     </widget>
    </item>
    <item>
