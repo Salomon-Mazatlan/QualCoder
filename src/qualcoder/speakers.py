@@ -54,8 +54,7 @@ INSERT_CHUNK_ROWS = 1000  # bulk-apply batch size: cancel/UI granularity vs per-
 
 http_scheme_tail_re = re.compile(r"(?:^|\s)https?$", flags=re.IGNORECASE)
 
-# Time stamp formats handled: Code A/V styles, SRT/WebVTT subtitle arrows and bare
-# times. Arrow form first so it is consumed whole; delimited forms before bare.
+# Code A/V styles, SRT/WebVTT arrows and bare times; arrow form first.
 _TS_ARROW_STAMP = r"(?:[0-9]{1,2}:)?[0-9][0-9]:[0-9][0-9][.,][0-9]{1,3}"
 _TS_SRT = _TS_ARROW_STAMP + r"\s*-->\s*" + _TS_ARROW_STAMP
 _TS_DELIMITED = (r"\[[0-9]?[0-9]:[0-9][0-9](?::[0-9][0-9])?\]"
@@ -70,8 +69,9 @@ _subtitle_index_line_re = re.compile(r"(?m)^[ \t]*\d{1,5}[ \t]*$")
 
 
 def split_span_excluding_timestamps(transcript: str, start: int, end: int):
-    """ Split [start, end) into pieces excluding time stamps and subtitle-index
-    lines, trimmed, empties dropped. Returns absolute [(p0, p1), ...]. """
+    """
+    Split [start, end) into pieces excluding time stamps and subtitle-index lines.
+    """
 
     segment = transcript[start:end]
     cuts = []
@@ -103,8 +103,9 @@ def split_span_excluding_timestamps(transcript: str, start: int, end: int):
 
 
 def blank_timestamps(line: str) -> str:
-    """ Replace time stamps with same-length spaces: detection skips them and
-    every position stays valid on the original text. """
+    """
+    Blank time stamps with same-length spaces; positions stay valid.
+    """
 
     return timestamp_re.sub(lambda m: " " * len(m.group()), line)
 
@@ -342,8 +343,7 @@ class DialogSpeakers(QtWidgets.QDialog):
         self.ui.pushButton_select_files.clicked.connect(self.select_files)
         # La seleccion de identificadores es por casillas del modelo (ver _setup_identifier_combo).
         # Identifier selection is via model checkboxes (see _setup_identifier_combo).
-        # On-demand detection (Van): auto-scan only with one file; with several,
-        # settings changes mark results stale and the button runs the scan.
+        # On-demand detection (Van): auto only with one file; else stale + button.
         self.ui.pushButton_scan.setIcon(qta.icon('mdi6.account-voice', options=[{'scale_factor': 1.3}]))
         self.ui.pushButton_scan.clicked.connect(self.reparse)
         self.ui.lineEdit_custom.editingFinished.connect(self._auto_rescan)
@@ -452,9 +452,7 @@ class DialogSpeakers(QtWidgets.QDialog):
         Also open the popup when the read-only text field is pressed. 
         """
         
-        # Wheel over an Additional-codes combo: only act when its list is open;
-        # otherwise forward the wheel to the table so scrolling the speakers list
-        # never adds a code by accident.
+        # Wheel on an Additional combo: forward to the table unless its list is open.
         if event.type() == QtCore.QEvent.Type.Wheel and isinstance(obj, QtWidgets.QComboBox) \
                 and obj in getattr(self, '_additional_combos', {}).values():
             if obj.view().isVisible():
@@ -671,7 +669,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         label.setToolTip("\n".join(names))
 
     def _auto_rescan(self):
-        """ Re-scan only when cheap (one file); otherwise mark results stale. """
+        """
+        Re-scan only with one file; otherwise mark results stale.
+        """
 
         if len(self.files) <= 1:
             self.reparse()
@@ -679,7 +679,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         self._mark_stale()
 
     def _mark_stale(self):
-        """ Drop results and ask for a manual scan. """
+        """
+        Drop results and ask for a manual scan.
+        """
 
         self.codings = []
         self.speaker_summary = []
@@ -697,7 +699,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         self.fill_table()
 
     def _regex_store_path(self):
-        """ Per-project regex JSON path, or None. """
+        """
+        Per-project regex JSON path, or None.
+        """
 
         project_path = getattr(self.app, 'project_path', '') or ''
         if not project_path or not os.path.isdir(project_path):
@@ -705,7 +709,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         return os.path.join(project_path, "speaker_regex.json")
 
     def _load_saved_regexes(self):
-        """ Load the saved custom regexes for this project (most recent first). """
+        """
+        Load the saved regexes (most recent first).
+        """
 
         path = self._regex_store_path()
         if path is None or not os.path.exists(path):
@@ -719,7 +725,9 @@ class DialogSpeakers(QtWidgets.QDialog):
             return []
 
     def _remember_custom_regex(self, text):
-        """ Save a successful regex (recent first, deduped, cap 20); best effort. """
+        """
+        Save a successful regex (deduped, cap 20); best effort.
+        """
 
         text = (text or '').strip()
         if not text:
@@ -739,7 +747,9 @@ class DialogSpeakers(QtWidgets.QDialog):
             logger.warning(f"speaker_regex.json could not be written: {err}")
 
     def _apply_regex_completer(self):
-        """ Completer with the saved regexes. """
+        """
+        Completer with the saved regexes.
+        """
 
         completer = QtWidgets.QCompleter(self._saved_regexes, self.ui.lineEdit_custom)
         completer.setCaseSensitivity(QtCore.Qt.CaseSensitivity.CaseInsensitive)
@@ -784,8 +794,7 @@ class DialogSpeakers(QtWidgets.QDialog):
             line_start = re.compile(r"^\s*([^.,#@\[{\r\n]{1," + mlen + r"}?)\s*:\s*", flags=re.UNICODE)
         else:  # Nombre: solo. Name: alone
             line_start = re.compile(r"^\s*([^.,\r\n]{1," + mlen + r"}?)\s*:\s*", flags=re.UNICODE)
-        # Mid-paragraph, PDF-reflow friendly: uppercase start, digits allowed (P02),
-        # separators . , ; ! ? ... or closing quotes, optional space ("anterior.P02:").
+        # Mid-paragraph, PDF-reflow friendly (digits, wide separators, optional space).
         mid_paragraph = re.compile(
             r"(?<=[.,;!?\u2026)\]\"\u00bb'])[ \t]*([" + _UPPER + r"][^\W_]*(?:[ \t]+[^\W_]+){0,5}):",
             flags=re.UNICODE)
@@ -984,7 +993,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         current_extras: List[str] = []           # inline ';' codes of THIS turn
 
         def finalize_current_turn():
-            """Store the active turn and reset the state."""
+            """
+            Store the active turn and reset the state.
+            """
             nonlocal current_name, current_start, current_end, current_content_start, current_extras
             if current_name is None or current_start is None or current_end is None:
                 return
@@ -994,8 +1005,7 @@ class DialogSpeakers(QtWidgets.QDialog):
                 content_start += 1
             seltext_full = transcript[current_start:current_end]        # con el nombre. with the label
             seltext_response = transcript[content_start:current_end]    # solo la respuesta. response only
-            # Filter on: mid-turn stamps split the turn into pieces of the same code.
-            # Filter off: one piece = whole turn (previous behaviour).
+            # Filter on: mid-turn stamps split the turn; off: one whole piece.
             if filter_ts:
                 segments_full = [(p0, p1, transcript[p0:p1])
                                  for p0, p1 in split_span_excluding_timestamps(transcript, current_start, current_end)]
@@ -1050,8 +1060,7 @@ class DialogSpeakers(QtWidgets.QDialog):
                 eol_len = 0
 
             line_wo_eol = line[:-eol_len] if eol_len else line
-            # With the filter, boundaries use the blanked line: stamp-only and
-            # subtitle-index lines count as blank (never absorbed into turns).
+            # Filter: stamp-only and subtitle-index lines count as blank.
             effective = blank_timestamps(line_wo_eol) if filter_ts else line_wo_eol
             line_is_blank = (effective.strip() == "")
             if filter_ts and not line_is_blank and re.fullmatch(r"\s*\d{1,5}\s*", effective):
@@ -1071,8 +1080,7 @@ class DialogSpeakers(QtWidgets.QDialog):
             scan_line = effective
             turns = list(iter_speaker_turns(pattern, scan_line, anywhere))  # nombre normalizado y filtro de URLs. normalized name and URL filter
             if turns:
-                # Text before the first marker continues the previous turn (anywhere
-                # mode); checked on the blanked prefix.
+                # Prefix text continues the previous turn (blanked check).
                 prefix = scan_line[:turns[0][1]]
                 if current_name is not None and prefix.strip() != "":
                     current_end = line_start + len(prefix.rstrip())
@@ -1256,14 +1264,16 @@ class DialogSpeakers(QtWidgets.QDialog):
         return combo
 
     def _row_inline_codes(self, name):
-        """ Detected inline codes for the speaker: {code: count}. """
+        """
+        Detected inline codes for the speaker: {code: count}.
+        """
 
         return getattr(self, '_extras_counts', {}).get(name, {})
 
     def _render_additional(self, combo, speaker):
-        """ Cell display: user row-level codes first, then the inline per-turn codes
-        ('*' marks the ones not present in every turn). Inline tokens are display
-        only: commits filter them back out (they stay per turn). """
+        """
+        Cell shows user codes plus inline per-turn codes ('*' = not in every turn).
+        """
 
         tokens = list(speaker.get('additional_codes', []))
         per_extras = self._row_inline_codes(speaker['name'])
@@ -1529,10 +1539,8 @@ class DialogSpeakers(QtWidgets.QDialog):
         return dialog, table
 
     def _apply_preview(self, segments, table):
-        """ 
-        Copia al modelo el estado de las casillas y la columna Inline codes editada.
-        
-        Copy back the tick states and the edited Inline codes column. 
+        """
+        Copy back the tick states and the edited Inline codes column.
         """
         
         for r, seg in enumerate(segments):
@@ -1542,8 +1550,9 @@ class DialogSpeakers(QtWidgets.QDialog):
                 seg['extra_codes'] = self._split_codes(inline_item.text())
 
     def _preview_table_menu(self, table, speaker, position):
-        """ Normalisation menu for inline codes: copy to all segments, promote to
-        the row's Additional codes, or clear. """
+        """
+        Normalisation menu: copy to all, promote to Additional codes, or clear.
+        """
 
         row = table.rowAt(position.y())
         if row < 0:
@@ -1566,7 +1575,9 @@ class DialogSpeakers(QtWidgets.QDialog):
 
     @staticmethod
     def _preview_copy_inline_to_all(table, inline_text):
-        """ Unify: set the same inline-codes text on every segment row. """
+        """
+        Set the same inline-codes text on every row.
+        """
 
         for r in range(table.rowCount()):
             item = table.item(r, 3)
@@ -1574,8 +1585,9 @@ class DialogSpeakers(QtWidgets.QDialog):
                 item.setText(inline_text)
 
     def _preview_promote_inline(self, table, speaker, inline_text):
-        """ Stage the promotion to the row's Additional codes (applied on accept)
-        and clear the redundant per-segment copies. """
+        """
+        Stage promotion to Additional codes (applied on accept); clear per-segment copies.
+        """
 
         pending = getattr(table, "_pending_promotions", None)
         if pending is None:
@@ -1603,8 +1615,7 @@ class DialogSpeakers(QtWidgets.QDialog):
     def ok(self):
         cur = self.app.conn.cursor()
         include_name = self.ui.checkBox_include_name.isChecked()  # codificar con nombre o solo la respuesta
-        # Collision pre-check before writing: in-category names reuse silently;
-        # outside collisions ask (use existing / suffix / cancel).
+        # Collision pre-check: in-category reuse; outside collisions ask.
         reuse_outside = False
         planned: List[str] = []
         sel_names = set()
@@ -1734,8 +1745,7 @@ class DialogSpeakers(QtWidgets.QDialog):
                         cur, code_name, speakers_catid, used_colors, file_counts,
                         reuse_outside=reuse_outside)
 
-                    # Chunked bulk insert (executemany + INSERT OR IGNORE): per-row
-                    # executes froze the GUI on huge runs; events/cancel per chunk.
+                    # Chunked executemany + INSERT OR IGNORE; events/cancel per chunk.
                     chunk: List[tuple] = []
                     for coding in target_codings:
                         # One row per piece (filter may split a turn around stamps).
@@ -1848,8 +1858,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         return speaker_code[0]
 
     def _insert_codings_chunk(self, cur, rows):
-        """ Bulk-insert one chunk with INSERT OR IGNORE (duplicates skipped in C).
-        Returns rows actually inserted. """
+        """
+        Bulk-insert one chunk (INSERT OR IGNORE); returns rows inserted.
+        """
 
         before = self.app.conn.total_changes
         cur.executemany("insert or ignore into code_text "
@@ -1858,8 +1869,9 @@ class DialogSpeakers(QtWidgets.QDialog):
         return self.app.conn.total_changes - before
 
     def _find_suffixed_in_category(self, cur, code_name, catid):
-        """ Existing suffixed variant of code_name inside the category ('Rosa (2)'),
-        or None; smallest suffix wins. Ad-infinitum guard. """
+        """
+        Suffixed variant of the name inside the category, or None.
+        """
 
         cur.execute("select cid, name, ifnull(memo,''), catid, owner, date, color from code_name "
                     "where catid == ? and name like ?", (catid, code_name + " (%"))
