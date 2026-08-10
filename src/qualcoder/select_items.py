@@ -154,8 +154,9 @@ class DialogSelectItems(QtWidgets.QDialog):
         self._apply_preselection()
 
     def _sync_checks_with_selection(self, selected, deselected):
-        """ Ticks follow the selection (click/drag/Ctrl/Shift); preselected rows
-        survive plain clicks. """
+        """
+        Ticks follow the selection; preselected rows survive plain clicks.
+        """
 
         if self.model is None:
             return
@@ -167,8 +168,9 @@ class DialogSelectItems(QtWidgets.QDialog):
                                QtCore.Qt.ItemDataRole.CheckStateRole)
 
     def eventFilter(self, obj, event):
-        """ Indicator clicks toggle the tick only (press/release swallowed);
-        elsewhere the normal selection applies. """
+        """
+        Indicator clicks toggle the tick only; elsewhere normal selection applies.
+        """
 
         if self.with_checkboxes and obj is self.ui.listView.viewport() and \
                 event.type() in (QtCore.QEvent.Type.MouseButtonPress,
@@ -186,7 +188,9 @@ class DialogSelectItems(QtWidgets.QDialog):
         return super().eventFilter(obj, event)
 
     def _point_on_check_indicator(self, index, pos) -> bool:
-        """ True if the viewport point is over the item's check indicator. """
+        """
+        True if the viewport point is over the check indicator.
+        """
 
         view = self.ui.listView
         style = view.style()
