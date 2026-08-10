@@ -173,12 +173,19 @@ class App(object):
                 proj_paths.append(proj_path)
                 result.append(i)
 
-        # Write the latest projects file in order of most recently opened and without duplicate projects
-        with open(self.persist_path, 'w', encoding='utf-8') as f:
-            for i, line in enumerate(result):
-                if i < 8:
-                    f.write(line)
-                    f.write(os.linesep)
+        # Write the latest projects file in order of most recently opened and without duplicate projects.
+        # Atomic write (temp file + os.replace): a crash or forced kill mid-write can
+        # never truncate the file, so the auto-open of the last project survives.
+        try:
+            tmp_path = self.persist_path + ".tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                for i, line in enumerate(result):
+                    if i < 8:
+                        f.write(line)
+                        f.write(os.linesep)
+            os.replace(tmp_path, self.persist_path)
+        except Exception as err:
+            logger.warning(f"recent_projects.txt could not be rewritten: {err}")
         return result
 
     def append_recent_project(self, new_path: str):
@@ -194,9 +201,11 @@ class App(object):
         result = self.read_previous_project_paths()
         dated_path = nowdate + "|" + new_path
         if not result:
-            with open(self.persist_path, 'w', encoding='utf-8') as f:
+            tmp_path = self.persist_path + ".tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 f.write(dated_path)
                 f.write(os.linesep)
+            os.replace(tmp_path, self.persist_path)  # atomic: never truncated by a kill
             return
         # Compare first persisted project path to the currently open project path
         if "|" in result[0]:  # safety check
@@ -205,10 +214,12 @@ class App(object):
                 result.sort()
                 if len(result) > 8:
                     result = result[(len(result) - 8):]
-        with open(self.persist_path, 'w', encoding='utf-8') as f:
+        tmp_path = self.persist_path + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             for i, line in enumerate(result):
                 f.write(line)
                 f.write(os.linesep)
+        os.replace(tmp_path, self.persist_path)  # atomic: never truncated by a kill
 
     def get_most_recent_projectpath(self):
         """ Get most recent project path from .qualcoder/recent_projects.txt
