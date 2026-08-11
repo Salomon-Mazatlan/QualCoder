@@ -26,6 +26,7 @@ import fitz
 import json
 import openpyxl
 import pandas as pd
+import platform
 from pathlib import Path
 import PIL
 from PIL import Image
@@ -62,6 +63,7 @@ from .report_codes import DialogReportCodes  # for isInstance()
 from .ris import Ris
 from .select_items import DialogSelectItems
 from .view_av import DialogViewAV
+from .view_av_waveform import waveform_backend_available, generate_waveform_png_async, waveform_colour  # <- L
 from .code_av import DialogCodeAV  # for isinstance update files
 from .view_image import DialogViewImage, DialogCodeImage  # for isinstance update files
 from .text_decoding import decode_text_with_best_encoding as decode_text_with_best_encoding_helper
@@ -1002,6 +1004,12 @@ class DialogManageFiles(QtWidgets.QDialog):
         menu = QtWidgets.QMenu()
         menu.setStyleSheet(f"QMenu {{font-size:{self.app.settings['fontsize']}pt}} ")
         action_view = menu.addAction(_("View"))
+        # Import a transcription from an external file (e.g. a noScribe .txt or .html export)
+        # into the empty .txt transcription auto-created for an audio/video file. <- L
+        action_import_transcription = None
+        if mediapath is not None and len(mediapath) > 5 and \
+                mediapath[:6] in ("/audio", "audio:", "/video", "video:"):
+            action_import_transcription = menu.addAction(_("Import transcription from file"))
         action_view_original_text = None
         action_pdf_to_images = None
         action_extract_pdf_text = None
@@ -1095,6 +1103,9 @@ class DialogManageFiles(QtWidgets.QDialog):
             return
         if action == action_view:
             self.view()
+            return
+        if action == action_import_transcription:
+            self.import_transcription_from_file(id_)
             return
         if action == action_view_original_text:
             bad_link = bad_link = self.app.check_bad_file_links(id_)  # List is returned
@@ -2318,6 +2329,184 @@ class DialogManageFiles(QtWidgets.QDialog):
             self.av_dialog_open = None
             return
 
+    def create_transcription_for_av(self, av_id, av_name):
+        """ Create an empty transcription text source for an audio/video file and link it
+        through av_text_id. Used when the original transcription was deleted (leaving a
+        dangling av_text_id) or never existed. Mirrors the transcription-creation block
+        in load_media_reference.
+
+        param:
+            av_id: source id of the audio/video file, Integer
+            av_name: name of the audio/video file, String
+
+        returns:
+            (tr_id, tr_name) of the new transcription text source, or (None, None) on duplicate
+        """
+
+        tr_name = av_name + ".txt"
+        if any(s['name'] == tr_name for s in self.source):
+            QtWidgets.QMessageBox.warning(self, _('Duplicate file'),
+                                          _("Duplicate filename.\nFile not created"))
+            return None, None
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = {'name': tr_name, 'id': -1, 'fulltext': "", 'mediapath': None, 'memo': "",
+                 'owner': self.app.settings['codername'], 'date': now, 'av_text_id': None}
+        cur = self.app.conn.cursor()
+        cur.execute("insert into source(name,fulltext,mediapath,memo,owner,date) values(?,?,?,?,?,?)",
+                    (entry['name'], entry['fulltext'], entry['mediapath'], entry['memo'], entry['owner'],
+                     entry['date']))
+        self.app.conn.commit()
+        cur.execute("select last_insert_rowid()")
+        tr_id = cur.fetchone()[0]
+        entry['id'] = tr_id
+        # Link the av file entry to this text file
+        cur.execute("update source set av_text_id=? where id=?", [tr_id, av_id])
+        self.app.conn.commit()
+
+        # add doc to vectorstore
+        if self.app.settings['ai_enable'] == 'True':
+            self.app.ai.sources_vectorstore.import_document(entry['id'], entry['name'], entry['fulltext'])
+
+        # Add file attribute placeholders
+        cur.execute('select name from attribute_type where caseOrFile ="file"')
+        attr_types = cur.fetchall()
+        insert_sql = "insert into attribute (name, attr_type, value, id, date, owner) values(?,'file','',?,?,?)"
+        for a in attr_types:
+            cur.execute(insert_sql, [a[0], tr_id, now, self.app.settings['codername']])
+        self.app.conn.commit()
+        self._emit_project_table_changes(["source", "attribute"])  # <- L
+
+        self.source.append(entry)
+        self.parent_text_edit.append(tr_name + _(" created."))
+        return tr_id, tr_name
+
+    def import_transcription_from_file(self, id_):
+        """ Load transcript text from an external file (e.g. a noScribe .txt or .html export)
+        into the .txt transcription that QualCoder auto-creates for an audio or video file.
+
+        The audio/video source row stores the linked transcription text source id in av_text_id
+        (see load_media_reference). The content of the chosen file replaces that transcription's
+        fulltext. Reading mirrors load_file_text so behaviour matches a normal text import:
+        charset detection for plain text, html_to_text for html/htm, line-ending normalisation
+        and pseudonym substitution. Warns before overwriting an existing transcription, codings
+        or annotations.
+
+        param:
+            id_: source id of the selected audio/video file, Integer
+        """
+
+        # Release the media file if an AV dialog is open
+        if self.av_dialog_open is not None:
+            self.av_dialog_open.mediaplayer.stop()
+            self.av_dialog_open = None
+
+        av_source = next((s for s in self.source if s['id'] == id_), None)
+        if av_source is None:
+            return
+
+        # --- Locate the linked transcription text source via av_text_id
+        cur = self.app.conn.cursor()
+        cur.execute("select av_text_id from source where id=?", [id_])
+        res = cur.fetchone()
+        tr_id = res[0] if res is not None else None
+        # The link may be stale: the transcription source could have been deleted while
+        # av_text_id still points to its old id. Confirm the row actually exists. <- L
+        tr_name = None
+        if tr_id is not None:
+            cur.execute("select name from source where id=?", [tr_id])
+            res = cur.fetchone()
+            if res is None:
+                tr_id = None  # dangling link -> treat as missing
+            else:
+                tr_name = res[0]
+        # Fallback for older projects with no link: match a text source named "<av name>.txt"
+        if tr_id is None:
+            cur.execute("select id, name from source where name=? and mediapath is null",
+                        [av_source['name'] + ".txt"])
+            res = cur.fetchone()
+            if res is not None:
+                tr_id, tr_name = res[0], res[1]
+                cur.execute("update source set av_text_id=? where id=?", [tr_id, id_])
+                self.app.conn.commit()
+        # Still nothing: recreate an empty transcription and link it (mirrors load_media_reference)
+        if tr_id is None:
+            tr_id, tr_name = self.create_transcription_for_av(id_, av_source['name'])
+            if tr_id is None:
+                return
+
+        # --- Choose the transcription file
+        start_dir = str(Path(self.app.project_path).parent)
+        filepath, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self, _("Select transcription file"), start_dir,
+            _("Transcript files") + " (*.txt *.srt *.vtt *.md *.html *.htm);;" + _("All files") + " (*.*)")
+        if not filepath:
+            return
+
+        # --- Read the file (same logic as load_file_text for txt and html)
+        text_ = ""
+        try:
+            if filepath[-5:].lower() == ".html" or filepath[-4:].lower() == ".htm":
+                with open(filepath, "r", encoding="utf-8", errors="surrogateescape") as sourcefile:
+                    html_text = sourcefile.read()
+                text_ = html_to_text(html_text)
+            else:
+                text_, detected_encoding = self.decode_text_with_best_encoding(filepath)
+                logger.debug(f"Import transcription from {filepath} decoded as {detected_encoding}")
+        except Exception as err:
+            logger.warning(str(err))
+            Message(self.app, _("Warning"), _("Cannot read file") + f"\n{filepath}\n{err}", "warning").exec()
+            return
+        if text_ is None:
+            text_ = ""
+        # Normalise line endings and strip BOM so stored positions match the editor (see load_file_text)
+        text_ = text_.replace("\r\n", "\n").replace("\r", "\n")
+        if text_ and text_[0] == "\ufeff":
+            text_ = text_[1:]
+        if text_.strip() == "":
+            Message(self.app, _("Warning"),
+                    _("The selected file has no readable text.") + f"\n{filepath}", "warning").exec()
+            return
+
+        # --- Apply pseudonyms, consistent with text import
+        for pseudonym in self.load_pseudonyms():
+            text_ = re.sub(rf"(?<!\w){re.escape(pseudonym['original'])}(?!\w)", pseudonym['pseudonym'], text_)
+
+        # --- Warn before overwriting existing transcription, codings or annotations
+        cur.execute("select length(ifnull(fulltext,'')) from source where id=?", [tr_id])
+        existing_len = cur.fetchone()[0]
+        cur.execute("select count(*) from code_text where fid=?", [tr_id])
+        codings = cur.fetchone()[0]
+        cur.execute("select count(*) from annotation where fid=?", [tr_id])
+        annotations = cur.fetchone()[0]
+        if existing_len > 0 or codings > 0 or annotations > 0:
+            warn = _("The transcription already contains text.") + "\n"
+            warn += _("Codings: ") + str(codings) + "    " + _("Annotations: ") + str(annotations) + "\n\n"
+            warn += _("Replacing it may shift or remove existing codings and annotations. Continue?")
+            reply = QtWidgets.QMessageBox.question(
+                self, _("Overwrite transcription"), warn,
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No)
+            if reply == QtWidgets.QMessageBox.StandardButton.No:
+                return
+
+        # --- Store the transcription
+        cur.execute("update source set fulltext=? where id=?", [text_, tr_id])
+        self.app.conn.commit()
+        for s in self.source:
+            if s['id'] == tr_id:
+                s['fulltext'] = text_
+                break
+
+        # Update the AI vectorstore if enabled
+        if self.app.settings['ai_enable'] == 'True':
+            self.app.ai.sources_vectorstore.import_document(tr_id, tr_name, text_)
+
+        self.parent_text_edit.append(_("Transcription imported into ") + tr_name)
+        self.load_file_data()
+        self._emit_project_table_changes(["source"])  # notify other open dialogs <- L
+        Message(self.app, _("Transcription imported"),
+                _("Transcription loaded into: ") + tr_name).exec()
+
     def view_image(self, x:int):
         """ View an image file and edit the image memo.
         Args:
@@ -2379,6 +2568,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         id_ = cur.fetchone()[0]
         item['id'] = id_
         ui = DialogEditTextFile(self.app, id_)
+        ui.ui.textEdit.setAcceptRichText(False)
         ui.exec()
         icon, metadata, err_ = self.get_icon_and_metadata(id_)
         item['icon'] = icon
@@ -2840,6 +3030,40 @@ class DialogManageFiles(QtWidgets.QDialog):
                 if isinstance(c, DialogReportCodes):
                     c.get_files_and_cases()
 
+    def create_waveform_png(self, file_id, mediapath):
+        """ Pre-build the waveform image for an audio or video file, stored as
+        audio/waveform_<id>.png, so the AV coding dialog can reuse it instead of regenerating
+        it each time. For video the waveform is drawn from its audio track. Skipped on Linux
+        (ffmpeg showwavespic can segfault on some distros). Requires ffmpeg installed. """
+
+        if platform.system() == "Linux" or mediapath is None:
+            return
+        if not waveform_backend_available():
+            # ffmpeg not installed: skip silently. Playback (VLC) and coding still work;
+            # the coding dialog will show a "waveform unavailable" hint instead.
+            return
+        if mediapath[0:6] in ("/audio", "/video"):
+            abs_path = self.app.project_path + mediapath
+        elif mediapath[0:6] in ("audio:", "video:"):
+            abs_path = mediapath[6:]
+        else:
+            return
+        waveform_path = str(Path(self.app.project_path) / "audio" / f"waveform_{file_id}.png")
+        # Fire-and-forget worker thread so importing long media does not freeze the UI.
+        # Runs are serialised in the helper; the coding dialog waits if still pending. <- L
+        generate_waveform_png_async(abs_path, waveform_path,
+                                    waveform_colour(self.app.settings['stylesheet']))
+
+    def remove_waveform_png(self, file_id):
+        """ Remove the cached waveform image for a deleted media file, to avoid residual files. """
+
+        waveform_path = str(Path(self.app.project_path) / "audio" / f"waveform_{file_id}.png")
+        try:
+            if Path(waveform_path).exists():
+                Path(waveform_path).unlink()
+        except OSError as err:
+            logger.warning(_("Deleting waveform error: ") + str(err))
+
     def load_media_reference(self, mediapath:str):
         """ Load media reference information for all file types.
 
@@ -2873,6 +3097,10 @@ class DialogManageFiles(QtWidgets.QDialog):
             msg += _(" imported.")
         self.parent_text_edit.append(msg)
         self.source.append(entry)
+
+        # Pre-build the waveform image for audio and video files so the coding dialog loads faster
+        if mediapath[:6] in ("/audio", "audio:", "/video", "video:"):
+            self.create_waveform_png(id_, mediapath)
 
         # Create an empty transcription file for audio and video
         if mediapath[:6] in ("/audio", "audio:", "/video", "video:"):
@@ -3061,7 +3289,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         pseudonyms = self.load_pseudonyms()
         if suffix != '.pdf':
             for pseudonym in pseudonyms:
-                pseudonymised = re.sub(rf"\b{pseudonym['original']}\b", pseudonym['pseudonym'], text_)
+                pseudonymised = re.sub(rf"(?<!\w){re.escape(pseudonym['original'])}(?!\w)", pseudonym['pseudonym'], text_)
                 text_ = pseudonymised
 
         # Internal storage
@@ -3423,6 +3651,8 @@ class DialogManageFiles(QtWidgets.QDialog):
                         Path(filepath).unlink()
                     except FileNotFoundError as err:
                         logger.warning(_("Deleting file error: ") + str(err))
+                # Remove the cached waveform image, if any
+                self.remove_waveform_png(s['id'])
                 # Delete stored coded sections and source details
                 cur.execute("delete from source where id = ?", [s['id']])
                 cur.execute("delete from code_image where id = ?", [s['id']])
@@ -3522,6 +3752,8 @@ class DialogManageFiles(QtWidgets.QDialog):
                         p = Path(filepath).unlink()
                     except FileNotFoundError as err:
                         logger.warning(_("Deleting file error: ") + str(err))
+                # Remove the cached waveform image, if any
+                self.remove_waveform_png(file_id)
                 # Delete stored coded sections and source details
                 cur.execute("delete from source where id = ?", [file_id])
                 cur.execute("delete from code_image where id = ?", [file_id])
