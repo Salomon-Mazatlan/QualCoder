@@ -2306,12 +2306,19 @@ Click "Yes" to start now.')
             cur.execute('update project set databaseversion="v15", about=?', [self.app.version])
             self.app.conn.commit()
             self.ui.textEdit.append(_("Updating database to version") + " v15")
+        # Repair: projects created with the DDL typo 'avbookmarktext' instead of
+        # 'avbookmarktextpos'. The v15 block never fixes them because avbookmarkfile exists. <- L
         try:
-            cur.execute("select avbookmarktextpos from project")  # Need separate check here, due to error introduced during 2026
+            cur.execute("select avbookmarktextpos from project")
         except sqlite3.OperationalError:
-            cur.execute("alter table project add avbookmarktextpos integer")
+            try:
+                # Rename keeps any stored bookmark position
+                cur.execute("alter table project rename column avbookmarktext to avbookmarktextpos")
+            except sqlite3.OperationalError:
+                cur.execute("alter table project add avbookmarktextpos integer")
             self.app.conn.commit()
-        # Database version v16 - sub-codes: a code can be nested under another code (supercid)
+            self.ui.textEdit.append(_("Repaired project table column avbookmarktextpos"))
+        # Database version v16 - sub-codes: a code can be nested under another code (supercid) <- L
         try:
             cur.execute("select supercid from code_name")
         except sqlite3.OperationalError:
