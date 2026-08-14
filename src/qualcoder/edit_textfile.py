@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -605,11 +605,18 @@ class DialogEditTextFile(QtWidgets.QDialog):
             print(e_)
             self.app.conn.rollback()
             raise
+        self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
         # update doc in vectorstore
         if self.has_changed:
             if self.app.settings['ai_enable'] == 'True':
                 self.app.ai.sources_vectorstore.import_document(self.fid, self.name, self.text)
         super(DialogEditTextFile, self).accept()
+
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
 
     def update_casetext(self):
         """ Update linked case text positions. """
