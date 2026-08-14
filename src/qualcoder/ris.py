@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -347,6 +347,12 @@ class RisImport:
             self.create_file_placeholder_attributes()
             self.import_ris_file(file_path)
 
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
+
     def create_file_attributes(self):
         """ Creates the attributes for Ref_Authors, Ref_Title, Ref_Type, Ref_Year, Ref_Journal """
 
@@ -354,6 +360,7 @@ class RisImport:
         cur = self.app.conn.cursor()
         ref_vars = {'Ref_Authors': 'character', 'Ref_Title': 'character', 'Ref_Type': 'character',
                     'Ref_Year': 'numeric', 'Ref_Journal': 'character'}
+        created = False
         for key in ref_vars:
             cur.execute("select name from attribute_type where name=?", [key])
             res = cur.fetchone()
@@ -361,7 +368,10 @@ class RisImport:
                 cur.execute("insert into attribute_type (name,date,owner,memo,caseOrFile, valuetype) values(?,?,?,?,?,?)",
                         (key, now_date, self.app.settings['codername'], "", 'file', ref_vars[key]))
                 self.app.conn.commit()
+                created = True
         self.app.delete_backup = False
+        if created:
+            self._emit_project_table_changes(['attribute_type'])
 
     def create_file_placeholder_attributes(self):
         """ Creates empty placeholder attributes for each file.
@@ -376,6 +386,7 @@ class RisImport:
         attr_types = cur.fetchall()
         attr_types = ["Ref_Authors", "Ref_Title", "Ref_Type", "Ref_Year", "Ref_Journal"]
         insert_sql = "insert into attribute (name, attr_type, value, id, date, owner) values(?,'file','',?,?,?)"
+        created = False
         for source in sources:
             for att in attr_types:
                 sql = "select value from attribute where id=? and name=?"
@@ -386,6 +397,9 @@ class RisImport:
                                     self.app.settings['codername']]
                     cur.execute(insert_sql, placeholders)
                     self.app.conn.commit()
+                    created = True
+        if created:
+            self._emit_project_table_changes(['attribute'])
 
     def import_ris_file(self, filepath):
         """
@@ -516,6 +530,8 @@ class RisImport:
             pairs.append((max_risid, attach_paths))
             new_entries += 1
         self.app.conn.commit()
+        if new_entries > 0:
+            self._emit_project_table_changes(['ris'])
         if self.refs_dialog:
             self.refs_dialog.get_data()
 
