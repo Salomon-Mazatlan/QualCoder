@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -143,6 +143,12 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         self.file_ids_names = self.app.get_text_filenames()
         self.app.project_events.project_data_changed.connect(self._on_project_data_changed)
         self.process_data()
+
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
 
     def _rebuild_selected_code_strings(self):
         self.code_names_list = []
@@ -1086,6 +1092,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                 except Exception as e_:
                     print(e_)
                     logger.debug(e_)
+            self._emit_project_table_changes(['code_name', 'code_text', 'code_image'])
 
     def fill_table(self):
         """ Fill table using code names alphabetically (case insensitive), using self.data """
