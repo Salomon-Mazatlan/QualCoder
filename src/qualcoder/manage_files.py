@@ -14,10 +14,10 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU Lesser General Public License along with QualCoder.
 If not, see <https://www.gnu.org/licenses/>.
 
-Author: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
+Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 from PyQt6.QtWidgets import QProgressDialog
@@ -1298,6 +1298,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             self.load_file_data()
             self.app.delete_backup = False
             self.update_files_in_dialogs()
+            self._emit_project_table_changes(['source'])
 
     def extract_pdf_text_copy(self, row:int):
         """ Creates a new TEXT source with a copy of the PDF's fulltext (the one already
@@ -1351,6 +1352,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.fill_table()
         self.app.delete_backup = False
         self.update_files_in_dialogs()
+        self._emit_project_table_changes(['source', 'attribute'])
 
     def pdf_to_images(self, mediapath:str):
         """ Turn pdf pages into an image for each page.
@@ -1470,6 +1472,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 cases_text = self.get_cases_by_filename(self.ui.tableWidget.item(row, self.NAME_COLUMN).text())
                 self.ui.tableWidget.item(row, self.CASE_COLUMN).setText(cases_text)
                 self.source[row]['case'] = cases_text
+        self._emit_project_table_changes(['case_text'])
         if self.file_filter_active():
             self.apply_file_filter()
 
@@ -1500,6 +1503,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.load_file_data()
         self.app.delete_backup = False
         self.update_files_in_dialogs()
+        self._emit_project_table_changes(['source'])
         # update doc in vectorstore
         id_ = int(self.ui.tableWidget.item(row, self.ID_COLUMN).text())
         if self.app.settings['ai_enable'] == 'True':
@@ -1537,6 +1541,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         if self.app.settings['ai_enable'] == 'True':
             self.app.ai.sources_vectorstore.update_vectorstore()
         self.files_renamed = [x for x in self.files_renamed if not (selection['fid'] == x.get('fid'))]
+        self._emit_project_table_changes(['source'])
         if len(self.files_renamed) == 0:
             self.ui.pushButton_undo.setEnabled(False)
 
@@ -1585,6 +1590,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             entry = {'old_name': existing_name, 'name': new_name, 'fid': fid}
             self.files_renamed.append(entry)
         self.parent_text_edit.append(msg + err_msg)
+        self._emit_project_table_changes(['source'])
         # Updating vectorstore
         if self.app.settings['ai_enable'] == 'True':
             self.app.ai.sources_vectorstore.update_vectorstore()
@@ -1677,6 +1683,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.update_files_in_dialogs()
         self.load_file_data()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source'])
 
     def button_import_linked_file(self):
         """ User presses button to import a linked file into the project folder.
@@ -1733,6 +1740,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.update_files_in_dialogs()
         self.load_file_data()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source'])
 
     def mark_speakers(self):
         """ Mark the speakers in text files.
@@ -1790,6 +1798,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         cur.execute(sql)
         attr_types = cur.fetchall()
         insert_sql = "insert into attribute (name, attr_type, value, id, date, owner) values(?,'file','',?,?,?)"
+        changed = False
         for source in sources:
             for attribute in attr_types:
                 sql = "select value from attribute where id=? and name=?"
@@ -1799,6 +1808,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                     placeholders = [attribute[0], source[0], datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                     self.app.settings['codername']]
                     cur.execute(insert_sql, placeholders)
+                    changed = True
         self.app.conn.commit()
 
         # Check and delete attribute values where file has been deleted
@@ -1809,6 +1819,9 @@ class DialogManageFiles(QtWidgets.QDialog):
         for r in res:
             cur.execute("delete from attribute where attr_type='file' and id=?", [r[0], ])
             self.app.conn.commit()
+            changed = True
+        if changed:
+            self._emit_project_table_changes(['attribute'])
 
     def export_attributes(self):
         """ Export attributes from table to an Excel file. """
@@ -1953,6 +1966,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 self.app.conn.commit()
                 self.parent_text_edit.append(_("Auto-renamed invalid file: ") + f"'{s['name']}' -> {new_name}")
                 s['name'] = new_name
+                self._emit_project_table_changes(['source'])
         self.header_labels = [_("Name"), _("Memo"), _("Date"), _("Id"), _("Case")]
         # Attributes
         sql = "select name from attribute_type where caseOrFile='file' order by upper(name)"
@@ -2201,6 +2215,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 cur = self.app.conn.cursor()
                 cur.execute('update source set memo=? where id=?', (ui.memo, self.source[x]['id']))
                 self.app.conn.commit()
+            self._emit_project_table_changes(['source'])
             if self.source[x]['memo'] == "":
                 self.ui.tableWidget.setItem(x, self.MEMO_COLUMN, QtWidgets.QTableWidgetItem())
             else:
@@ -2306,10 +2321,8 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.source[x]['fulltext'] = fulltext
         # The editor saved changes: notify the bus so open coding dialogs
         # (code_text, code_pdf) reload and do not keep stale positions.
-        if result == QtWidgets.QDialog.DialogCode.Accepted and \
-                getattr(self.app, "project_events", None) is not None:
-            self.app.project_events.emit_table_changes(
-                ['source', 'code_text', 'annotation', 'case_text'], source=self)
+        if result == QtWidgets.QDialog.DialogCode.Accepted:
+            self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
 
     def view_av(self, x: int):
         """ View an audio or video file. Edit the memo. Edit the transcript file.
@@ -2552,6 +2565,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             cur.execute('update source set memo=? where id=?', (self.source[x]['memo'],
                                                                 self.source[x]['id']))
             self.app.conn.commit()
+            self._emit_project_table_changes(['source'])
         if self.source[x]['memo'] == "":
             self.ui.tableWidget.setItem(x, self.MEMO_COLUMN, QtWidgets.QTableWidgetItem())
         else:
@@ -2614,6 +2628,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.source.append(item)
         self.fill_table()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source', 'attribute'])
 
     def link_files(self):
         """ Trigger to link to file location. """
@@ -3164,6 +3179,7 @@ class DialogManageFiles(QtWidgets.QDialog):
 
             self.parent_text_edit.append(entry['name'] + _(" created."))
             self.source.append(entry)
+        self._emit_project_table_changes(['source', 'attribute'])
 
     def load_pseudonyms(self):
         """ Pseudonyms stored in pseudonyms.json in qda data folder.
@@ -3359,6 +3375,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             msg += _(" linked")
         self.parent_text_edit.append(msg)
         self.source.append(entry)
+        self._emit_project_table_changes(['source', 'attribute'])
         # Offer (once per batch) to code highlight annotations; they are not
         # painted in the coding view (annots=False).
         if suffix == '.pdf':
@@ -3765,6 +3782,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.load_file_data()
         self.fill_table()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source', 'code_text', 'code_image', 'code_av', 'annotation', 'case_text', 'attribute'])
 
     def delete(self):
         """ Delete files from database and update model and widget.
@@ -3871,6 +3889,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.parent_text_edit.append(_("Deleted: ") + filenames)
         self.load_file_data()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source', 'code_text', 'code_image', 'code_av', 'annotation', 'case_text', 'attribute'])
 
     def get_tooltip_values(self, attribute_name:str):
         """ Get values to display in tooltips for the value list column.
