@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -115,6 +115,12 @@ class DialogSQL(QtWidgets.QDialog):
             pass
         self.ui.splitter.splitterMoved.connect(self.update_sizes)
         self.ui.splitter_2.splitterMoved.connect(self.update_sizes)
+
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
 
     def update_sizes(self):
         """ Called by splitter resized """
@@ -408,6 +414,7 @@ class DialogSQL(QtWidgets.QDialog):
                     cur = self.app.conn.cursor()
                     cur.execute("delete from stored_sql where title=?", [title])
                     self.app.conn.commit()
+                    self._emit_project_table_changes(['stored_sql'])
                     del self.stored_sqls[i]
                     break
             self.get_schema_update_tree_widget()
@@ -505,6 +512,7 @@ class DialogSQL(QtWidgets.QDialog):
         try:
             cur.execute(sql, [title, description, grouper, ssql])
             self.app.conn.commit()
+            self._emit_project_table_changes(['stored_sql'])
         except Exception as e:
             Message(self.app, _("Cannot save"), str(e)).exec()
         self.get_schema_update_tree_widget()
