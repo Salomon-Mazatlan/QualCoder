@@ -14,10 +14,10 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU Lesser General Public License along with QualCoder.
 If not, see <https://www.gnu.org/licenses/>.
 
-Author: Colin Curtain (ccbogel)
+Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -129,6 +129,12 @@ class DialogReferenceManager(QtWidgets.QDialog):
         self.ui.splitter.setSizes([500, 200])
         self.table_files_rows_hidden = False
         self.table_refs_rows_hidden = False
+
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
 
     def get_data(self):
         """ Get data for files and references. """
@@ -895,6 +901,7 @@ class DialogReferenceManager(QtWidgets.QDialog):
         # whole FAISS index, and a batch would queue one rebuild per attachment. Counted here only;
         # _update_ai_vectorstore does the single pass when the batch ends.
         self.attachments_imported += 1
+        self._emit_project_table_changes(['source', 'attribute'])
         self.parent_text_edit.append(filename + _(" imported"))
         if ext == ".pdf":
             self._import_pdf_annotations(fid, file_path, text_, progress)
@@ -1006,6 +1013,7 @@ class DialogReferenceManager(QtWidgets.QDialog):
             for attribute in attributes:
                 cur.execute(sql, [fid, attribute])
                 self.app.conn.commit()
+        self._emit_project_table_changes(['source', 'attribute'])
         self.get_data()
 
     def link_reference_to_files(self, ris_id:int|None=None, fid:int|None=None):
@@ -1084,6 +1092,7 @@ class DialogReferenceManager(QtWidgets.QDialog):
             for attribute in attr_values:
                 cur.execute(sql, [attr_values[attribute], fid, attribute])
                 self.app.conn.commit()
+        self._emit_project_table_changes(['source', 'attribute'])
         self.get_data()
 
     def edit_reference(self):
@@ -1137,6 +1146,7 @@ class DialogReferenceManager(QtWidgets.QDialog):
                             [ui_re.tableWidget.item(row, 1).text(), ris_id, key])
                 self.app.conn.commit()
                 ref_edited = True
+                self._emit_project_table_changes(['ris'])
         # Update Reference attributes
         for file_ in self.files:
             if file_['risid'] == ris_id:
@@ -1178,6 +1188,7 @@ class DialogReferenceManager(QtWidgets.QDialog):
             for attribute in attributes:
                 cur.execute(sql, [source[0], attribute])
                 self.app.conn.commit()
+        self._emit_project_table_changes(['ris', 'source', 'attribute'])
         self.get_data()
         self.fill_table_refs()
         self.fill_table_files()
