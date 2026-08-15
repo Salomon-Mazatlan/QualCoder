@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -730,7 +730,8 @@ class DialogViewAV(QtWidgets.QDialog):
         cur.execute("update source set fulltext=?, date=? where id=?", [text, now, self.transcription[0]])
         self.app.conn.commit()
         self.app.delete_backup = False
-        self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
+        # Only source.fulltext is rewritten here; subscribers reload the file on 'source'
+        self._emit_project_table_changes(['source'])
         cur.execute("select id, fulltext, name from source where id=?", [self.transcription[0]])
         self.transcription = cur.fetchone()
         if self.transcription is not None and self.transcription[1] is None:
