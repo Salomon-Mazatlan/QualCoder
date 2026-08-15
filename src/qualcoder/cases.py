@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -237,6 +237,7 @@ class DialogCases(QtWidgets.QDialog):
         cur = self.app.conn.cursor()
         cur.execute("select name from attribute_type where caseOrFile='case'")
         attribute_names = cur.fetchall()
+        inserted = False
         for c in self.cases:
             for att_name in attribute_names:
                 cur.execute("select value from attribute where id=? and name=? and attr_type='case'",
@@ -246,7 +247,9 @@ class DialogCases(QtWidgets.QDialog):
                     cur.execute("insert into attribute (value,id,name,attr_type, date,owner) values(?,?,?,'case',?,?)",
                                 ("", c['caseid'], att_name[0], now_date, self.app.settings['codername']))
                     self.app.conn.commit()
-                    self._emit_project_table_changes(['attribute'])
+                    inserted = True
+        if inserted:
+            self._emit_project_table_changes(['attribute'])
     def help(self):
         """ Open help for transcribe section in browser. """
         self.app.help_wiki("3.3.-Cases")
@@ -385,7 +388,8 @@ class DialogCases(QtWidgets.QDialog):
                     cur.execute("insert into attribute (name,attr_type,value,id,date,owner) values(?,?,?,?,?,?)",
                                 [attribute_name, "case", "", c['caseid'],  now_date, self.app.settings['codername']])
                     self.app.conn.commit()
-                    self._emit_project_table_changes(['attribute'])
+        # No event here: this runs on every refresh and sort, including refreshes
+        # triggered by the bus itself. The user actions that write attributes emit.
 
         self.fill_table()
 
@@ -700,6 +704,7 @@ class DialogCases(QtWidgets.QDialog):
         row = self.ui.tableWidget.currentRow()
         col = self.ui.tableWidget.currentColumn()
         value = str(self.ui.tableWidget.item(row, col).text()).strip()
+        changed_tables = []
         if col == self.NAME_COLUMN:  # update case name
             # Check that no other case name has this text and this is not empty
             update = True
@@ -713,6 +718,7 @@ class DialogCases(QtWidgets.QDialog):
                 cur.execute("update cases set name=? where caseid=?", (value, self.cases[row]['caseid']))
                 self.app.conn.commit()
                 self.cases[row]['name'] = value
+                changed_tables.append("cases")
             else:  # put the original text in the cell
                 self.ui.tableWidget.item(row, col).setText(self.cases[row]['name'])
         if col >= self.ATTRIBUTE_START_COLUMN:  # Update attribute value
@@ -743,7 +749,8 @@ class DialogCases(QtWidgets.QDialog):
             cur.execute("update attribute set value=?, date=?, owner=? where id=? and name=? and attr_type='case'",
                         (value, now_date, self.app.settings['codername'], self.cases[row]['caseid'], attribute_name))
             self.app.conn.commit()
-        self._emit_project_table_changes(["attribute"])
+            changed_tables.append("attribute")
+        self._emit_project_table_changes(changed_tables)
 
         # Update self.cases[attributes]
         # Add list of attribute values to cases, order matches header columns
