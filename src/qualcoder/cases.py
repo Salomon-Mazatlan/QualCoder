@@ -14,10 +14,10 @@ See the GNU General Public License for more details.
 You should have received a copy of the GNU Lesser General Public License along with QualCoder.
 If not, see <https://www.gnu.org/licenses/>.
 
-Author: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
+Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder.wordpress.com/
 https://qualcoder-org.github.io
+https://qualcoder.wordpress.com/
 https://qualcoder.org/
 """
 
@@ -221,7 +221,7 @@ class DialogCases(QtWidgets.QDialog):
         self.ui.textBrowser.clear()
 
     def _emit_project_table_changes(self, tables):
-        """ Notify other open dialogs about changed project tables."""
+        """Notify other open dialogs about changed project tables."""
 
         if getattr(self.app, "project_events", None) is not None:
             self.app.project_events.emit_table_changes(tables, source=self)
@@ -246,6 +246,7 @@ class DialogCases(QtWidgets.QDialog):
                     cur.execute("insert into attribute (value,id,name,attr_type, date,owner) values(?,?,?,'case',?,?)",
                                 ("", c['caseid'], att_name[0], now_date, self.app.settings['codername']))
                     self.app.conn.commit()
+                    self._emit_project_table_changes(['attribute'])
     def help(self):
         """ Open help for transcribe section in browser. """
         self.app.help_wiki("3.3.-Cases")
@@ -384,6 +385,7 @@ class DialogCases(QtWidgets.QDialog):
                     cur.execute("insert into attribute (name,attr_type,value,id,date,owner) values(?,?,?,?,?,?)",
                                 [attribute_name, "case", "", c['caseid'],  now_date, self.app.settings['codername']])
                     self.app.conn.commit()
+                    self._emit_project_table_changes(['attribute'])
 
         self.fill_table()
 
@@ -655,6 +657,7 @@ class DialogCases(QtWidgets.QDialog):
         self.fill_table()
         self.parent_text_edit.append(_("Case added: ") + item['name'])
         self.app.delete_backup = False
+        self._emit_project_table_changes(['cases', 'attribute'])
 
     def delete_case(self):
         """ When delete button pressed, case is deleted from model and database. """
@@ -688,6 +691,7 @@ class DialogCases(QtWidgets.QDialog):
         self.load_cases_data()
         self.app.delete_backup = False
         self.fill_table()
+        self._emit_project_table_changes(['cases', 'case_text', 'attribute'])
 
     def cell_modified(self):
         """ If the case name has been changed in the table widget update the database.
@@ -791,6 +795,7 @@ class DialogCases(QtWidgets.QDialog):
             cur = self.app.conn.cursor()
             cur.execute('update cases set memo=? where caseid=?', (self.cases[x]['memo'], self.cases[x]['caseid']))
             self.app.conn.commit()
+            self._emit_project_table_changes(['cases'])
             if self.cases[x]['memo'] == "" or self.cases[x]['memo'] is None:
                 self.ui.tableWidget.setItem(x, self.MEMO_COLUMN, QtWidgets.QTableWidgetItem())
             else:
