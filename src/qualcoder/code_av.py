@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -731,12 +731,17 @@ class DialogCodeAV(QtWidgets.QDialog):
                 cur.execute("select cid, pos0, pos1, ifnull(seltext,'') from code_text "
                             "where fid=? and owner=? and avid is null",
                             [self.transcription[0], speaker_coder_name])
+                mirrored = False
                 for s_cid, s_p0, s_p1, s_text in cur.fetchall():
-                    self._create_av_segment_from_text_code(s_cid, s_p0, s_p1, s_text,
-                                                           owner=speaker_coder_name)
+                    if self._create_av_segment_from_text_code(s_cid, s_p0, s_p1, s_text,
+                                                              owner=speaker_coder_name):
+                        mirrored = True
                 self.load_segments()
                 self.fill_code_counts_in_tree()
                 self.get_coded_text_update_eventfilter_tooltips()
+                if mirrored:
+                    # One event for the whole speaker run, not one per turn
+                    self._emit_project_table_changes(['code_av', 'code_text'])
             self._record_speakers_undo(ctids_before)
             if self.app.conn is not None and speaker_coder_name not in self.app.get_coder_names_in_project(
                     only_visible=True):
@@ -2001,6 +2006,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         cur.execute("select avid, memo from code_av where id=? and cid=? and pos0=? and pos1=? and owner=?",
                     [self.file_['id'], cid, ms0, ms1, owner])
         existing = cur.fetchone()
+        written = False
         if existing:
             avid, old_memo = existing[0], existing[1] or ""
             if entry not in old_memo:
@@ -2008,6 +2014,7 @@ class DialogCodeAV(QtWidgets.QDialog):
                 cur.execute("update code_av set memo=? where avid=?", [memo, avid])
                 self.app.conn.commit()
                 self.app.delete_backup = False
+                written = True
         else:
             cur.execute("insert into code_av (id, pos0, pos1, cid, memo, date, owner, important) "
                         "values(?,?,?,?,?,?,?, null)",
@@ -2016,6 +2023,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             avid = cur.lastrowid
             self.app.conn.commit()
             self.app.delete_backup = False
+            written = True
             self.load_segments()
             self.fill_code_counts_in_tree()
         # --- Text coding (code_text): link it to the wave segment (native code_text.avid)
@@ -2034,8 +2042,10 @@ class DialogCodeAV(QtWidgets.QDialog):
                         [tmemo, avid, cid, self.transcription[0], pos0_char, pos1_char, owner])
             self.app.conn.commit()
             self.app.delete_backup = False
+            written = True
             self.get_coded_text_update_eventfilter_tooltips()
-        self._emit_project_table_changes(['code_av', 'code_text'])
+        # The caller emits one event for the whole action, so no event is sent here
+        return written
 
     def _delete_linked_av_segment(self, item):
         """ Remove the wave segment linked to a text coding. Uses the native code_text.avid
@@ -2058,7 +2068,6 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.app.conn.commit()
             if deleted:
                 self.app.delete_backup = False
-                self._emit_project_table_changes(['code_av'])
             return deleted > 0
         # Legacy fallback: no stored link, match by recomputed timestamp range
         return self._delete_av_segment_from_text_code(item['cid'], item['pos0'], item['pos1'],
@@ -2109,7 +2118,6 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         if deleted:
             self.app.delete_backup = False
-            self._emit_project_table_changes(['code_av'])
         return deleted > 0
 
     def _av_ms_to_text_range(self, ms0, ms1):
@@ -2185,8 +2193,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             cur.execute("update code_text set avid=? where ctid=?", [avid, already[0]])
             self.app.conn.commit()
             self.app.delete_backup = False
-            self._emit_project_table_changes(['code_av', 'code_text'])
-            return
+            return True
         audio_info = (f"[Audio: {ms0}-{ms1} ms "
                       f"({msecs_to_hours_mins_secs(ms0)} - {msecs_to_hours_mins_secs(ms1)})]")
         now = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -2202,7 +2209,8 @@ class DialogCodeAV(QtWidgets.QDialog):
             return
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
-        self._emit_project_table_changes(['code_av', 'code_text'])
+        # The caller emits one event for the whole action, so no event is sent here
+        return True
 
     def _seek_to_clicked_timestamp(self, event):
         """ If a left click landed on a transcript timestamp, seek the media to that time.
@@ -3742,11 +3750,12 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.load_segments()
         # Reverse mirror: also code the transcript text spanning this segment's times
-        self._create_text_code_from_av_segment(cid, self.segment['start_msecs'], self.segment['end_msecs'])
+        mirrored = self._create_text_code_from_av_segment(cid, self.segment['start_msecs'],
+                                                          self.segment['end_msecs'])
         self.clear_segment()
         self.app.delete_backup = False
         self.fill_code_counts_in_tree()
-        self._emit_project_table_changes(['code_av'])
+        self._emit_project_table_changes(['code_av', 'code_text'] if mirrored else ['code_av'])
 
     def clear_segment(self):
         """ Called by assign_segment_to code. """
@@ -4424,15 +4433,19 @@ class DialogCodeAV(QtWidgets.QDialog):
                                                                    coded['memo'], coded['date'], coded['important']))
             self.app.conn.commit()
             self.app.delete_backup = False
-            self._emit_project_table_changes(['code_text'])
+            coded_written = True
         except Exception as e_:
             logger.debug(str(e_))
             print(e_)
+            coded_written = False
         # update coded, filter for tooltip
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
         # EXPERIMENTAL: mirror this text coding onto the wave via bracketing timestamps
-        self._create_av_segment_from_text_code(cid, coded['pos0'], coded['pos1'], coded['seltext'])
+        mirrored = self._create_av_segment_from_text_code(cid, coded['pos0'], coded['pos1'], coded['seltext'])
+        if coded_written or mirrored:
+            # One event for the whole mark, covering the wave mirror when it wrote
+            self._emit_project_table_changes(['code_text', 'code_av'] if mirrored else ['code_text'])
 
         # Update recent_codes
         tmp_code = next((item for item in self.codes if item['cid'] == cid), None)
