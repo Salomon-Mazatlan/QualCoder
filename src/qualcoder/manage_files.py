@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 from PyQt6.QtWidgets import QProgressDialog
@@ -1798,7 +1798,6 @@ class DialogManageFiles(QtWidgets.QDialog):
         cur.execute(sql)
         attr_types = cur.fetchall()
         insert_sql = "insert into attribute (name, attr_type, value, id, date, owner) values(?,'file','',?,?,?)"
-        changed = False
         for source in sources:
             for attribute in attr_types:
                 sql = "select value from attribute where id=? and name=?"
@@ -1808,7 +1807,6 @@ class DialogManageFiles(QtWidgets.QDialog):
                     placeholders = [attribute[0], source[0], datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                     self.app.settings['codername']]
                     cur.execute(insert_sql, placeholders)
-                    changed = True
         self.app.conn.commit()
 
         # Check and delete attribute values where file has been deleted
@@ -1819,9 +1817,8 @@ class DialogManageFiles(QtWidgets.QDialog):
         for r in res:
             cur.execute("delete from attribute where attr_type='file' and id=?", [r[0], ])
             self.app.conn.commit()
-            changed = True
-        if changed:
-            self._emit_project_table_changes(['attribute'])
+        # No event here: the callers that reach this on a user action (delete,
+        # delete_button_multiple_files) already include 'attribute' in their payload.
 
     def export_attributes(self):
         """ Export attributes from table to an Excel file. """
@@ -1966,7 +1963,8 @@ class DialogManageFiles(QtWidgets.QDialog):
                 self.app.conn.commit()
                 self.parent_text_edit.append(_("Auto-renamed invalid file: ") + f"'{s['name']}' -> {new_name}")
                 s['name'] = new_name
-                self._emit_project_table_changes(['source'])
+        # No event here: this runs on every refresh and sort, including refreshes
+        # triggered by the bus itself. The user actions that write source emit.
         self.header_labels = [_("Name"), _("Memo"), _("Date"), _("Id"), _("Case")]
         # Attributes
         sql = "select name from attribute_type where caseOrFile='file' order by upper(name)"
@@ -2310,7 +2308,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 self.extract_pdf_text_copy(x)
             return
         ui = DialogEditTextFile(self.app, self.source[x]['id'])
-        result = ui.exec()
+        ui.exec()
         # Get fulltext if changed (for metadata)
         cur = self.app.conn.cursor()
         cur.execute("select fulltext from source where id=?", [self.source[x]['id']])
@@ -2319,10 +2317,9 @@ class DialogManageFiles(QtWidgets.QDialog):
         if res is not None:
             fulltext = res[0]
         self.source[x]['fulltext'] = fulltext
-        # The editor saved changes: notify the bus so open coding dialogs
-        # (code_text, code_pdf) reload and do not keep stale positions.
-        if result == QtWidgets.QDialog.DialogCode.Accepted:
-            self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
+        # DialogEditTextFile.accept() notifies the bus itself, so open coding dialogs
+        # (code_text, code_pdf) reload and do not keep stale positions. Emitting again
+        # here would dispatch the same change twice.
 
     def view_av(self, x: int):
         """ View an audio or video file. Edit the memo. Edit the transcript file.
