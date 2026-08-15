@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 import csv  # codebook import
