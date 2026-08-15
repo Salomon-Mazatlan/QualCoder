@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -5864,6 +5864,7 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.treeWidget.setEnabled(True)
         self.ui.widget_left.show()
         self.prev_text = ""
+        text_edited = self.edit_mode_has_changed
         if self.edit_mode_has_changed:
             self.text = self.ui.plainTextEdit.toPlainText()
             self.file_['fulltext'] = self.text
@@ -5878,7 +5879,6 @@ class DialogCodeText(QtWidgets.QWidget):
             self.ed_update_codings()
             self.ed_update_annotations()
             self.ed_update_casetext()
-            self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
             # Update vectorstore
             if self.app.settings['ai_enable'] == 'True':
                 self.app.ai.sources_vectorstore.import_document(self.file_['id'], self.file_['name'], self.text)
@@ -5905,8 +5905,9 @@ class DialogCodeText(QtWidgets.QWidget):
             self.coding_margin.update()
         # Notify the fulltext edit to the bus: an open DialogCodePdf with this file
         # must reload and re-verify the page mapping; without this it keeps stale
-        # text and positions in memory.
-        self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
+        # text and positions in memory. Only when something was actually edited.
+        if text_edited:
+            self._emit_project_table_changes(['source', 'code_text', 'annotation', 'case_text'])
 
     def edit_mode_find(self, direction:str="next"):
         """  Move forward or backward through the edit document.
