@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -531,11 +531,13 @@ class ZoteroImport:
                                 not_retrieved += 1
                                 continue
                             progress.setLabelText(os.path.basename(path_.replace("\\", "/")))
-                            fid = self.refs_dialog._import_attachment_file(path_, progress)
+                            fid = self.refs_dialog._import_attachment_file(path_, progress,
+                                                                           notify=False)
                             if fid is None:
                                 not_retrieved += 1
                                 continue
-                            self.refs_dialog.link_reference_to_files(risid, fid)
+                            # Silenced per attachment: one event after the batch
+                            self.refs_dialog.link_reference_to_files(risid, fid, notify=False)
                             linked += 1
                 finally:
                     # In a finally: a failure midway must leave neither the bar stuck
@@ -543,6 +545,9 @@ class ZoteroImport:
                     progress.close()
                     progress.deleteLater()
                     shutil.rmtree(tmp_dir, ignore_errors=True)
+                if linked > 0 and getattr(self.app, "project_events", None) is not None:
+                    # One event for the whole attachment batch, not one per file
+                    self.app.project_events.emit_table_changes(['source', 'attribute'], source=None)
         self.refs_dialog.get_data()
 
         msg = _("References imported: ") + f"{len(pairs)}"
