@@ -16,8 +16,8 @@ If not, see <https://www.gnu.org/licenses/>.
 
 Authors: Colin Curtain C, Kai Dröge, Justin Missaghieh--Poncet, Lorenzo Salomón
 https://github.com/ccbogel/QualCoder
-https://qualcoder-org.github.io
 https://qualcoder.wordpress.com/
+https://qualcoder-org.github.io
 https://qualcoder.org/
 """
 
@@ -553,17 +553,22 @@ class RisImport:
                             done += 1
                             progress.setValue(done)
                             progress.setLabelText(Path(path_.replace("\\", "/")).name)
-                            fid = self.refs_dialog._import_attachment_file(path_, progress)
+                            fid = self.refs_dialog._import_attachment_file(path_, progress,
+                                                                           notify=False)
                             if fid is None:
                                 failed += 1
                                 continue
-                            self.refs_dialog.link_reference_to_files(risid, fid)
+                            # Silenced per attachment: one event after the batch
+                            self.refs_dialog.link_reference_to_files(risid, fid, notify=False)
                             linked += 1
                 finally:
                     # No autoClose: close it, in a finally so a failure midway does not leave the
                     # bar stuck on screen.
                     progress.close()
                     progress.deleteLater()
+            if linked > 0 and getattr(self.app, "project_events", None) is not None:
+                # One event for the whole attachment batch, not one per file
+                self.app.project_events.emit_table_changes(['source', 'attribute'], source=None)
             self.refs_dialog.get_data()
 
         msg = _("Bibliography loaded from: ") + filepath + "\n"
