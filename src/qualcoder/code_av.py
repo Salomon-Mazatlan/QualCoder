@@ -565,6 +565,8 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.parent_textEdit.append(msg)
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
+        if undo_list:
+            self._emit_project_table_changes(['code_text'])
 
     def _record_speakers_undo(self, ctids_before):
         """ Register the Mark speakers run in the autocode undo history: deletes the
@@ -1436,6 +1438,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.get_files()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['source'])
 
     def go_to_latest_coded_file(self):
         """ Vertical splitter button activates this """
@@ -1755,6 +1758,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.file_['av_text_id'] = tr_id
             cur.execute("update source set av_text_id=? where id=?", [tr_id, self.file_['id']])
             self.app.conn.commit()
+            self._emit_project_table_changes(['source'])
             cur.execute("select id, fulltext, name from source where id=?", [tr_id])
             self.transcription = cur.fetchone()
             if self.transcription is not None and self.transcription[1] is None:
@@ -2031,6 +2035,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.app.conn.commit()
             self.app.delete_backup = False
             self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def _delete_linked_av_segment(self, item):
         """ Remove the wave segment linked to a text coding. Uses the native code_text.avid
@@ -2053,6 +2058,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.app.conn.commit()
             if deleted:
                 self.app.delete_backup = False
+                self._emit_project_table_changes(['code_av'])
             return deleted > 0
         # Legacy fallback: no stored link, match by recomputed timestamp range
         return self._delete_av_segment_from_text_code(item['cid'], item['pos0'], item['pos1'],
@@ -2103,6 +2109,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         if deleted:
             self.app.delete_backup = False
+            self._emit_project_table_changes(['code_av'])
         return deleted > 0
 
     def _av_ms_to_text_range(self, ms0, ms1):
@@ -2178,6 +2185,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             cur.execute("update code_text set avid=? where ctid=?", [avid, already[0]])
             self.app.conn.commit()
             self.app.delete_backup = False
+            self._emit_project_table_changes(['code_av', 'code_text'])
             return
         audio_info = (f"[Audio: {ms0}-{ms1} ms "
                       f"({msecs_to_hours_mins_secs(ms0)} - {msecs_to_hours_mins_secs(ms1)})]")
@@ -2194,6 +2202,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             return
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def _seek_to_clicked_timestamp(self, event):
         """ If a left click landed on a transcript timestamp, seek the media to that time.
@@ -2491,6 +2500,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.delete_backup = False
         self.load_segments()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av'])
 
     def _wave_recent_codes_menu(self, global_pos):
         """ Popup of recent codes to assign to the current wave selection (the 'Mark with
@@ -3013,6 +3023,12 @@ class DialogCodeAV(QtWidgets.QDialog):
                 any_visible_descendant = True
         return any_visible_descendant
 
+    def _emit_project_table_changes(self, tables):
+        """Notify other open dialogs about changed project tables."""
+
+        if getattr(self.app, "project_events", None) is not None:
+            self.app.project_events.emit_table_changes(tables, source=self)
+
     def update_dialog_codes_and_categories(self, tables: list[str]|None = None):
         """Refresh the local dialog after code/category changes and optionally notify other dialogs.
 
@@ -3028,8 +3044,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.highlight()
         self.get_coded_text_update_eventfilter_tooltips()
 
-        if self.app.project_events is not None:
-            self.app.project_events.emit_table_changes(tables, source=self)
+        self._emit_project_table_changes(tables)
 
     def _on_project_data_changed(self, tables, source):
         """Handle project change events from other dialogs.
@@ -3381,6 +3396,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             return
         Message(self.app, _("Screenshot imported"), file_path).exec()
         self.parent_textEdit.append(_("Screenshot imports: ") + image_name)
+        self._emit_project_table_changes(['source'])
 
     def eventFilter(self, object_, event):
         """ Using this event filter to identify treeWidgetItem drop events.
@@ -3602,6 +3618,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def extend_right(self, code_):
         """ Extend to right coded text. Shift right arrow """
@@ -3620,6 +3637,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def shrink_to_left(self, code_):
         """ Alt left arrow, shrinks coded text from the right end of the coded text. """
@@ -3638,6 +3656,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def shrink_to_right(self, code_):
         """ Alt right arrow shrinks coded text from the left end of the coded text. """
@@ -3656,6 +3675,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def increase_play_rate(self):
         """ Several increased rate options """
@@ -3726,6 +3746,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.clear_segment()
         self.app.delete_backup = False
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av'])
 
     def clear_segment(self):
         """ Called by assign_segment_to code. """
@@ -4117,6 +4138,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.get_coded_text_update_eventfilter_tooltips()
         self.load_segments()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def is_annotated(self, position):
         """ Check if position is annotated to provide annotation menu option.
@@ -4171,6 +4193,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.app.conn.commit()
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def coded_text_memo(self, position=None):
         """ Add or edit a memo for this coded text.
@@ -4216,6 +4239,7 @@ class DialogCodeAV(QtWidgets.QDialog):
                 i['memo'] = memo
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
+        self._emit_project_table_changes(['code_text'])
 
     def play_text(self, avid):
         """ Play the audio/video for this coded text selection that is mapped to an a/v segment. """
@@ -4400,6 +4424,7 @@ class DialogCodeAV(QtWidgets.QDialog):
                                                                    coded['memo'], coded['date'], coded['important']))
             self.app.conn.commit()
             self.app.delete_backup = False
+            self._emit_project_table_changes(['code_text'])
         except Exception as e_:
             logger.debug(str(e_))
             print(e_)
@@ -4469,6 +4494,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.get_coded_text_update_eventfilter_tooltips()
         self.app.delete_backup = False
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def restore_unmarked_text_codes(self):
         """ Restore the last deleted code(s).
@@ -4524,6 +4550,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.load_segments()
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av', 'code_text'] if av_restored else ['code_text'])
 
     def unmark(self, location):
         """ Remove code marking by this coder from selected text in current file.
@@ -4573,6 +4600,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
         self.app.delete_backup = False
+        self._emit_project_table_changes(['code_av', 'code_text'] if av_removed else ['code_text'])
 
     def annotate(self, cursor_pos):
         """ Add view, or remove an annotation for selected text.
@@ -4624,6 +4652,7 @@ class DialogCodeAV(QtWidgets.QDialog):
                                             + f"{item['pos0']}-{item['pos1']}" + _(" for: ") +
                                             self.transcription[2])
                 self.get_coded_text_update_eventfilter_tooltips()
+                self._emit_project_table_changes(['annotation'])
             return
 
         # Edit existing annotation
@@ -4639,6 +4668,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.app.delete_backup = False
             self.annotations = self.app.get_annotations()
             self.get_coded_text_update_eventfilter_tooltips()
+            self._emit_project_table_changes(['annotation'])
             return
 
         # If blank delete the annotation
@@ -4649,6 +4679,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.annotations = self.app.get_annotations()
             self.parent_textEdit.append(_("Annotation removed from position ")
                                         + f"{item['pos0']}" + _(" for: ") + self.transcription[2])
+            self._emit_project_table_changes(['annotation'])
         self.get_coded_text_update_eventfilter_tooltips()
 
     # Segment menu. A hack to fix when pyinstaller Segment.contextMenu does not work.
@@ -4731,6 +4762,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.delete_backup = False
         self.load_segments()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av'])
 
     def change_segment_code(self, segment):
         """ Change this segment's code to another one chosen from a selection dialog,
@@ -4762,6 +4794,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.load_segments()
         self.get_coded_text_update_eventfilter_tooltips()
         self.fill_code_counts_in_tree()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def set_segment_importance(self, segment):
         """ Set or unset importance to self.segment.
@@ -4781,6 +4814,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.delete_backup = False
         self.get_coded_text_update_eventfilter_tooltips()
         self.load_segments()
+        self._emit_project_table_changes(['code_av'])
 
     def edit_segment_memo(self, segment):
         """ View, edit or delete memo for this segment.
@@ -4800,6 +4834,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.load_segments()
+        self._emit_project_table_changes(['code_av'])
 
     def play_segment(self, segment):
         """ Play segment section. Stop at end of segment. """
@@ -4845,6 +4880,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.get_coded_text_update_eventfilter_tooltips()
         self.app.delete_backup = False
         self.load_segments()
+        self._emit_project_table_changes(['code_av', 'code_text'])
 
     def edit_segment_start(self, segment):
         """ Edit segment start time. """
@@ -4864,6 +4900,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.load_segments()
+        self._emit_project_table_changes(['code_av'])
 
     def edit_segment_end(self, segment):
         """ Edit segment end time """
@@ -4884,6 +4921,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.load_segments()
+        self._emit_project_table_changes(['code_av'])
 
     def on_segment_resized(self, segment, new_pos0, new_pos1):
         """ A coded band was resized by dragging an edge on the wave. Persist and reload. """
@@ -4899,6 +4937,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.load_segments()
+        self._emit_project_table_changes(['code_av'])
 
     # --- handles experimental
     def display_handles_for_code(self, position):
@@ -5020,6 +5059,7 @@ class DialogCodeAV(QtWidgets.QDialog):
             cur.execute(sql, [code_item['pos0'], code_item['pos1'], seltext, code_item['ctid']])
             self.app.conn.commit()
             self.app.delete_backup = False
+            self._emit_project_table_changes(['code_text'])
         except sqlite3.IntegrityError:
             self.app.conn.rollback()
             # Revert in-memory positions to undo temporary highlight
@@ -5249,6 +5289,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.code_av_dialog.load_segments()
         self.app.delete_backup = False
         self.code_av_dialog.fill_code_counts_in_tree()
+        self.code_av_dialog._emit_project_table_changes(['code_av'])
 
     def replace_code(self):
         """ Change code via the selection dialog (code_text style). """
@@ -5326,6 +5367,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.app.conn.commit()
         self.app.delete_backup = False
         self.code_av_dialog.get_coded_text_update_eventfilter_tooltips()
+        self.code_av_dialog._emit_project_table_changes(['code_av'])
         self.set_segment_tooltip()
 
     def link_segment_to_text(self):
@@ -5359,6 +5401,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
                                                           seg['owner'], seg['memo'], seg['date'], seg['avid']))
             self.code_av_dialog.app.conn.commit()
             self.app.delete_backup = False
+            self.code_av_dialog._emit_project_table_changes(['code_text'])
         except Exception as e_:
             print(e_)
         self.code_av_dialog.text_for_segment = {'cid': None, 'fid': None, 'seltext': None, 'pos0': None, 'pos1': None,
@@ -5385,6 +5428,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.code_av_dialog.app.conn.commit()
         self.draw_segment()
         self.app.delete_backup = False
+        self.code_av_dialog._emit_project_table_changes(['code_av'])
 
     def edit_segment_end(self):
         """ Edit segment end time """
@@ -5405,6 +5449,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.code_av_dialog.app.conn.commit()
         self.draw_segment()
         self.app.delete_backup = False
+        self.code_av_dialog._emit_project_table_changes(['code_av'])
 
     def play_segment(self):
         """ Play segment section. Stop at end of segment. """
@@ -5449,6 +5494,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.code_av_dialog.app.conn.commit()
         self.code_av_dialog.get_coded_text_update_eventfilter_tooltips()
         self.app.delete_backup = False
+        self.code_av_dialog._emit_project_table_changes(['code_av', 'code_text'])
 
     def edit_memo(self):
         """ View, edit or delete memo for this segment.
@@ -5468,6 +5514,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
         cur.execute(sql, values)
         self.code_av_dialog.app.conn.commit()
         self.app.delete_backup = False
+        self.code_av_dialog._emit_project_table_changes(['code_av'])
         self.set_segment_tooltip()
 
     def set_segment_tooltip(self):
