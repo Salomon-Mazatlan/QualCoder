@@ -241,6 +241,9 @@ def extract_pdf_highlights(filepath):
                 except Exception as err:
                     logger.debug(f"extract_pdf_highlights annot: {err}")
                 annot = annot.next
+    except Exception as err:
+        # Encrypted or damaged document: opening works but page iteration fails.
+        logger.warning(f"extract_pdf_highlights: {filepath} {err}")
     finally:
         doc.close()
     return out
@@ -277,6 +280,9 @@ def extract_pdf_annotations(filepath):
                 except Exception as err:
                     logger.debug(f"extract_pdf_annotations annot: {err}")
                 annot = annot.next
+    except Exception as err:
+        # Encrypted or damaged document: opening works but page iteration fails.
+        logger.warning(f"extract_pdf_annotations: {filepath} {err}")
     finally:
         doc.close()
     return out
@@ -316,6 +322,10 @@ def pdf_highlights_to_positions(filepath, highlights, progress_callback=None):
             step += 1
             if progress_callback is not None:
                 progress_callback(step, total_steps)
+    except Exception as err:
+        # Encrypted or damaged document: opening works but page iteration fails.
+        logger.warning(f"pdf_highlights_to_positions: {filepath} {err}")
+        return []
     finally:
         doc.close()
     results = []
