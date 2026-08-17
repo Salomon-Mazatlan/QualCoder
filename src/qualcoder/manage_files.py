@@ -3696,15 +3696,22 @@ class DialogManageFiles(QtWidgets.QDialog):
             # Delete text source
             if s['mediapath'] is None or s['mediapath'][0:5] == 'docs:' or s['mediapath'][0:6] == '/docs/':
                 try:
+                    # Relative components: an absolute "/documents/" segment anchors the
+                    # join and DISCARDS the project path, so unlink pointed at
+                    # /documents/<name> on the filesystem root, always raised
+                    # FileNotFoundError, and the physical file stayed in the project.
                     if s['mediapath'] is None:
                         # Legacy for older < 3.4 QualCoder projects
-                        p = Path(self.app.project_path) / "/documents/" / s['name']
+                        p = Path(self.app.project_path) / "documents" / s['name']
                         p.unlink()
-                    if s['mediapath'][0:6] == '/docs/':
-                        # Previously sliced s['name'][6:] leaving the file as a residual.
-                        p = Path(self.app.project_path) / "/documents/" / s['mediapath'][6:]
+                    elif s['mediapath'][0:6] == '/docs/':
+                        # elif: mediapath None cannot be sliced. Previously sliced
+                        # s['name'][6:] leaving the file as a residual.
+                        p = Path(self.app.project_path) / "documents" / s['mediapath'][6:]
                         p.unlink()
-                except FileNotFoundError as err:
+                except OSError as err:
+                    # Also PermissionError (file held by an external viewer or the OS
+                    # indexer): log and keep going, the database rows must still go.
                     logger.warning(_("Deleting file error: ") + str(err))
                 # Delete stored coded sections and source details
                 cur.execute("delete from source where id = ?", [s['id']])
@@ -3760,9 +3767,8 @@ class DialogManageFiles(QtWidgets.QDialog):
                     cur.execute("delete from case_text where fid = ?", [res[0]])
                     cur.execute("delete from attribute where attr_type ='file' and id=?", [res[0]])
                     self.app.conn.commit()
-                    # Delete from vectorstore
-                    if self.app.settings['ai_enable'] == 'True':
-                        self.app.ai.sources_vectorstore.delete_document(res[0])
+                    # Delete from vectorstore; the safe helper survives index locks
+                    self.vectorstore_delete_document_safe(res[0])
 
         self.update_files_in_dialogs()
         self.check_attribute_placeholders()
@@ -3806,15 +3812,21 @@ class DialogManageFiles(QtWidgets.QDialog):
             if self.source[row]['mediapath'] is None or self.source[row]['mediapath'][0:5] == 'docs:' or \
                     self.source[row]['mediapath'][0:6] == '/docs/':
                 try:
+                    # Relative components: an absolute "/documents/" segment anchors the
+                    # join and DISCARDS the project path, so unlink pointed at
+                    # /documents/<name> on the filesystem root, always raised
+                    # FileNotFoundError, and the physical file stayed in the project.
                     if self.source[row]['mediapath'] is None:
                         # Legacy for older QualCoder Projects < 3.3
                         # The condition was inverted (deleted when mediapath was present).
-                        p = Path(self.app.project_path) /"/documents/" / self.source[row]['name']
+                        p = Path(self.app.project_path) / "documents" / self.source[row]['name']
                         p.unlink()
-                    if self.source[row]['mediapath'] is not None and self.source[row]['mediapath'][0:6] == '/docs/':
-                        p = Path(self.app.project_path) / "/documents/" / self.source[row]['mediapath'][6:]
+                    elif self.source[row]['mediapath'][0:6] == '/docs/':
+                        p = Path(self.app.project_path) / "documents" / self.source[row]['mediapath'][6:]
                         p.unlink()
-                except FileNotFoundError as err:
+                except OSError as err:
+                    # Also PermissionError (file held by an external viewer or the OS
+                    # indexer): log and keep going, the database rows must still go.
                     logger.warning(_("Deleting file error: ") + str(err))
                 # Delete stored coded sections and source details
                 cur.execute("delete from source where id = ?", [file_id])
@@ -3855,9 +3867,9 @@ class DialogManageFiles(QtWidgets.QDialog):
                 cur.execute("delete from code_av where id = ?", [file_id])
                 cur.execute("delete from attribute where attr_type='file' and id=?", [file_id])
                 self.app.conn.commit()
-                # Delete from vectorstore (this should not be necessary since it's not a text file, but just to be sure...)
-                if self.app.settings['ai_enable'] == 'True':
-                    self.app.ai.sources_vectorstore.delete_document(file_id)
+                # Delete from vectorstore (should not be needed for non-text files, just to
+                # be sure); the safe helper survives index locks
+                self.vectorstore_delete_document_safe(file_id)
 
                 # Delete transcription text file
                 if av_text_id is not None:
@@ -3867,9 +3879,8 @@ class DialogManageFiles(QtWidgets.QDialog):
                     cur.execute("delete from case_text where fid = ?", [res[0]])
                     cur.execute("delete from attribute where attr_type ='file' and id=?", [res[0]])
                     self.app.conn.commit()
-                    # Delete from vectorstore
-                    if self.app.settings['ai_enable'] == 'True':
-                        self.app.ai.sources_vectorstore.delete_document(res[0])
+                    # Delete from vectorstore; the safe helper survives index locks
+                    self.vectorstore_delete_document_safe(res[0])
 
             self.files_renamed = [x for x in self.files_renamed if not (file_id == x.get('fid'))]
         self.update_files_in_dialogs()
