@@ -4676,19 +4676,30 @@ class DialogCodePdf(QtWidgets.QWidget):
         if source is self or not isinstance(tables, list):
             return
         tables = set(tables)
+        attr_filter_active = len(self.attributes) > 1
+        attr_refresh_done = False
         # Attributes changed in another dialog: recompute the active filter. Port of upstream 0ce9817
-        if ("attribute" in tables or "attribute_type" in tables) and len(self.attributes) > 1:
+        if ("attribute" in tables or "attribute_type" in tables) and attr_filter_active:
             self.get_files_from_attributes(refresh_only=True)
+            attr_refresh_done = True
         code_tree_changed = "code_cat" in tables or "code_name" in tables
         if code_tree_changed:
             self.get_codes_and_categories()
             self.code_tree.fill_tree()
             self.get_coded_text_update_eventfilter_tooltips()
             return
-        # Fulltext changed elsewhere: reload re-verifies the page mapping and
-        # refreshes text, codings and margins (otherwise positions go stale).
-        if "source" in tables and self.file_ is not None:
-            self.load_file(self.file_)
+        # Files changed elsewhere (imports from Manage files or References, renames,
+        # deletions, restructuring): rebuild the whole list, not only the open file.
+        # get_files restores and reloads the current file when it still exists (so
+        # stale positions refresh too) and clears the view when it was deleted; with
+        # an attribute filter active, the filtered rebuild does the same against the
+        # current database state.
+        if "source" in tables:
+            if attr_filter_active:
+                if not attr_refresh_done:
+                    self.get_files_from_attributes(refresh_only=True)
+            else:
+                self.get_files(preserve_current_file=True)
             return
         if "annotation" in tables and self.file_ is not None:
             self.annotations = self.app.get_annotations()
