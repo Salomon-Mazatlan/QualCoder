@@ -393,10 +393,9 @@ class DialogViewAV(QtWidgets.QDialog):
             if len(sizes) >= 2 and sizes[0] < 80:
                 total = max(sum(sizes), 400)
                 self.ui.splitter_left.setSizes([max(280, total // 2), total - max(280, total // 2)])
-        # Embed VLC into frame_video without forcing sibling/ancestor widgets (e.g. the
-        # transcript) to become native windows -> silences "must be a top level window" warnings
+        # Frame goes native lazily (winId() in _set_video_output, VLC only);
+        # the guard keeps ancestors alien
         self.ui.frame_video.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
-        self.ui.frame_video.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow, True)
         self.ui.pushButton_detach.setIcon(qta.icon('mdi6.open-in-new'))
         self.ui.pushButton_detach.setToolTip(_("Detach video to a window"))
         self.ui.pushButton_detach.pressed.connect(self.toggle_detach_video)
@@ -490,10 +489,9 @@ class DialogViewAV(QtWidgets.QDialog):
         if hasattr(self.mediaplayer, 'set_video_host'):
             self.mediaplayer.set_video_host(target)  # Qt backend
             return
-        if getattr(self, 'video_detached', False):
-            winid = int(self.ddialog.dframe.winId())
-        else:
-            winid = int(self.ui.frame_video.winId())
+        # Guard before winId(): ancestors stay alien
+        target.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
+        winid = int(target.winId())
         system = platform.system()
         if system == "Linux":
             self.mediaplayer.set_xwindow(winid)
