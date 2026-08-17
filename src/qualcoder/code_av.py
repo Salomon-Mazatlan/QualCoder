@@ -329,6 +329,8 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.ui.frame_video.setPalette(_pal)
         self.ui.frame_video.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.ui.frame_video.customContextMenuRequested.connect(self.video_frame_menu)
+        # Keep winId() from forcing the embedded ancestor chain native
+        self.ui.frame_video.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
         # Player backend combo (VLC / Qt), takes effect on the next media load
         self.ui.comboBox_player.addItems(["VLC", "Qt"])
         if vlc is None:
@@ -852,6 +854,8 @@ class DialogCodeAV(QtWidgets.QDialog):
             # Qt backend: a QVideoWidget fills the same frame
             self.mediaplayer.set_video_host(target)
             return
+        # Guard before winId(): ancestors stay alien
+        target.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
         winid = int(target.winId())
         system = platform.system()
         if system == "Linux":
