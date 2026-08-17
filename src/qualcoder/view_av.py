@@ -978,13 +978,16 @@ class DialogViewAV(QtWidgets.QDialog):
         """ Widely spaced keyframes make every seek rebuild seconds of frames
         in any player. Warn in the seek bar tooltip and widen coalescing. """
         self._seek_coalesce_ms = 120
+        self._kf_token = token = object()
         self._keyframe_gap = None
         self.ui.widget_seekbar.setToolTip("")
 
         def measure():
             # Reading keyframes decodes part of the file: off the UI thread so
             # loading a file never blocks playback controls
-            self._keyframe_gap = keyframe_interval_seconds(media_path) or 0.0
+            gap = keyframe_interval_seconds(media_path) or 0.0
+            if self._kf_token is token:  # drop results for a replaced file
+                self._keyframe_gap = gap
 
         threading.Thread(target=measure, daemon=True).start()
 
