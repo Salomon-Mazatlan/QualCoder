@@ -919,6 +919,11 @@ class DialogCodeAV(QtWidgets.QDialog):
 
     def reattach_video(self):
         """ Dock the floating video back into the embedded frame. """
+        self._dock_video_window(retarget=True)
+
+    def _dock_video_window(self, retarget):
+        """ Close the floating window; retarget=False skips the stop/play
+        cycle when the media is about to be replaced anyway. """
 
         if self.video_window is None:
             return
@@ -929,7 +934,10 @@ class DialogCodeAV(QtWidgets.QDialog):
         except Exception:
             pass
         self.ui.frame_video.setVisible(not getattr(self, 'is_audio', False))
-        self._retarget_video_output()
+        if retarget:
+            self._retarget_video_output()
+        else:
+            self._set_video_output()
         try:
             win.close()
             win.deleteLater()
@@ -1568,6 +1576,7 @@ class DialogCodeAV(QtWidgets.QDialog):
         self.stop()
         self.media = None
         self.file_ = None
+        self._dock_video_window(retarget=False)  # file gone: no video target left
         self._reset_segment_state()
         self.setWindowTitle(_("Media coding"))
         self.ui.pushButton_play.setEnabled(False)
@@ -1670,9 +1679,14 @@ class DialogCodeAV(QtWidgets.QDialog):
             self.volume_slider.setValue(100)
         self.ui.pushButton_coding.setEnabled(True)
         is_audio = self.file_['mediapath'][0:6] in ("/audio", "audio:")
+        self.is_audio = is_audio  # reattach_video reads it
+        if is_audio:
+            # A floating video window is pointless for audio
+            self._dock_video_window(retarget=False)
         self.ui.frame_video.setVisible(not is_audio)
         self.ui.pushButton_add_image_to_project.setEnabled(not is_audio)
         self.ui.pushButton_screensshot.setEnabled(not is_audio)
+        self.ui.pushButton_detach.setEnabled(not is_audio)
 
         # Clear comboBox tracks options and reload when playing/pausing
         self.ui.comboBox_tracks.clear()
@@ -2234,13 +2248,16 @@ class DialogCodeAV(QtWidgets.QDialog):
         """ Widely spaced keyframes make every seek rebuild seconds of frames
         in any player. Warn in the seek bar tooltip and widen coalescing. """
         self._seek_coalesce_ms = 120
+        self._kf_token = token = object()
         self._keyframe_gap = None
         self.ui.widget_seekbar.setToolTip("")
 
         def measure():
             # Reading keyframes decodes part of the file: off the UI thread so
             # loading a file never blocks playback controls
-            self._keyframe_gap = keyframe_interval_seconds(media_path) or 0.0
+            gap = keyframe_interval_seconds(media_path) or 0.0
+            if self._kf_token is token:  # drop results for a replaced file
+                self._keyframe_gap = gap
 
         threading.Thread(target=measure, daemon=True).start()
 
