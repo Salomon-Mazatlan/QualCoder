@@ -44,9 +44,10 @@ import zipfile
 #from .__main__ import App
 from .add_attribute import DialogAddAttribute
 from .add_item_name import DialogAddItemName
-from .code_pdf import DialogCodePdf, extract_pdf_fulltext, extract_pdf_highlights, \
-    closest_qualcoder_color, pdf_annotations_to_file_memo, \
-    code_pdf_highlights as code_pdf_highlights_shared  # Same extractor and word map as the PDF viewer
+from .code_pdf import DialogCodePdf
+from .pdf_utils import extract_pdf_fulltext, extract_pdf_highlights, \
+    pdf_annotations_to_file_memo, code_pdf_highlights, \
+    pdf_markups_question_text  # Same extractor and word map as the PDF viewer
 from .code_text import DialogCodeText  # for isinstance()
 from .color_selector import colour_ranges, colors
 from .confirm_delete import DialogConfirmDelete
@@ -3388,54 +3389,29 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.source.append(entry)
         if notify:
             self._emit_project_table_changes(['source', 'attribute'])
-        # Offer (once per batch) to code highlight annotations; they are not
-        # painted in the coding view (annots=False).
+        # Offer (once per batch) to code highlight and underline annotations; they
+        # are not painted in the coding view (annots=False).
         if suffix == '.pdf':
-            # Non-highlight annotations with text are appended to the file memo.
+            # Non-markup annotations with text are appended to the file memo.
             entry['memo'] = pdf_annotations_to_file_memo(self.app, self.parent_text_edit, entry['id'],
                                                          import_file, entry['memo'])
             try:
                 highlights = extract_pdf_highlights(import_file)
             except Exception as err:
-                logger.warning(f"Highlight detection: {import_file} {err}")
+                logger.warning(f"Markup detection: {import_file} {err}")
                 highlights = []
             if highlights:
                 if self.pdf_import_code_highlights is None:
-                    ask_msg = _("Highlighted segments were detected in the imported PDF(s).") + "\n\n"
-                    ask_msg += _("Code those segments? A 'PDF Highlights' category will be "
-                                 "created, with one code per highlight colour (named and "
-                                 "coloured after the closest QualCoder colour).")
                     reply = QtWidgets.QMessageBox.question(
-                        self, _("PDF highlights"), ask_msg,
+                        self, _("PDF highlights"), pdf_markups_question_text(highlights),
                         QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
                         QtWidgets.QMessageBox.StandardButton.Yes)
                     self.pdf_import_code_highlights = reply == QtWidgets.QMessageBox.StandardButton.Yes
                 if self.pdf_import_code_highlights:
                     # Reuses the batch import dialog; the phase only shows after acceptance.
-                    self.code_pdf_highlights(entry['id'], import_file, entry['fulltext'],
-                                             highlights, progress_)
+                    code_pdf_highlights(self.app, self.parent_text_edit, entry['id'], import_file,
+                                        entry['fulltext'], highlights, progress_, self)
         return True  # Import completed; lets import_files clean up failed copies
-
-    # why not use: color_selector.color_matcher() method
-    @staticmethod
-    def _closest_qualcoder_color(hex_color):
-        """ Delegates to code_pdf.closest_qualcoder_color.
-        Returns (hex of the palette colour, family name). """
-
-        return closest_qualcoder_color(hex_color)
-
-    def code_pdf_highlights(self, fid, filepath, fulltext, highlights, progress_=None):
-        """ Delegates to code_pdf.code_pdf_highlights.
-        Args:
-            fid: source id, Integer
-            filepath: PDF path
-            fulltext: the imported fulltext (paragraph layout)
-            highlights: output of extract_pdf_highlights TODO highlights variable - type()
-            progress_: the batch QProgressDialog from import_files, or None
-        """
-
-        code_pdf_highlights_shared(self.app, self.parent_text_edit, fid, filepath, fulltext,
-                                   highlights, progress_, self)
 
     def convert_odt_to_text(self, import_file:str):
         """ Convert odt to very rough equivalent with headings, list items and tables for
