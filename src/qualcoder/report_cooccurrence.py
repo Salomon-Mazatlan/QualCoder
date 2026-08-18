@@ -39,19 +39,18 @@ from .select_items import DialogSelectItems
 
 logger = logging.getLogger(__name__)
 
-# --- Imports for static image export
-# try:
-import networkx as nx
-from networkx.algorithms.community import louvain_communities, greedy_modularity_communities
-import matplotlib
-matplotlib.use('Agg')  # Static engine to generate PNGs without a graphical interface
-import matplotlib.pyplot as plt
-# import matplotlib.cm as cm  # Not used ?
-    
-'''    HAS_NETWORK_LIBS = True
-except Exception as e:
+# --- Imports for static image export. Guarded: a missing library must not break
+# app startup, because __main__ imports this module eagerly.
+try:
+    import networkx as nx
+    from networkx.algorithms.community import louvain_communities, greedy_modularity_communities
+    import matplotlib
+    matplotlib.use('Agg')  # Static engine to generate PNGs without a graphical interface
+    import matplotlib.pyplot as plt
+    HAS_NETWORK_LIBS = True
+except Exception as import_err:
     HAS_NETWORK_LIBS = False
-    print("Error loading graph libraries for PyInstaller:", e)'''
+    logger.warning(f"Graph libraries unavailable, graph exports disabled: {import_err}")
 
 
 class DialogReportCooccurrence(QtWidgets.QDialog):
@@ -102,6 +101,9 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         if hasattr(self.ui, 'pushButton_export_gephi'):
             self.ui.pushButton_export_gephi.setIcon(qta.icon('mdi6.graph-outline', options=[{'scale_factor': 1.4}]))
             self.ui.pushButton_export_gephi.pressed.connect(self.export_to_gephi)
+            if not HAS_NETWORK_LIBS:
+                self.ui.pushButton_export_gephi.setEnabled(False)
+                self.ui.pushButton_export_gephi.setToolTip(_("Requires the networkx library"))
         self.cluster_graph_format = {"size": 10, "color": "nodes"}
         self.coocurence_graph_format = {'size': 10}
         if hasattr(self.ui, 'pushButton_export_coocurrence_graph'):
@@ -109,11 +111,17 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
             self.ui.pushButton_export_coocurrence_graph.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
             self.ui.pushButton_export_coocurrence_graph.customContextMenuRequested.connect(self.coocurrence_graph_menu)
             self.ui.pushButton_export_coocurrence_graph.pressed.connect(self.view_graph)
+            if not HAS_NETWORK_LIBS:
+                self.ui.pushButton_export_coocurrence_graph.setEnabled(False)
+                self.ui.pushButton_export_coocurrence_graph.setToolTip(_("Requires networkx and matplotlib"))
         if hasattr(self.ui, 'pushButton_export_cluster_graph'):
             self.ui.pushButton_export_cluster_graph.setIcon(qta.icon('mdi6.image-multiple', options=[{'scale_factor': 1.4}]))
             self.ui.pushButton_export_cluster_graph.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
             self.ui.pushButton_export_cluster_graph.customContextMenuRequested.connect(self.cluster_graph_menu)
             self.ui.pushButton_export_cluster_graph.pressed.connect(self.view_cluster_graph)
+            if not HAS_NETWORK_LIBS:
+                self.ui.pushButton_export_cluster_graph.setEnabled(False)
+                self.ui.pushButton_export_cluster_graph.setToolTip(_("Requires networkx and matplotlib"))
 
         self.ui.tableWidget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.ui.tableWidget.customContextMenuRequested.connect(self.table_menu)
@@ -303,7 +311,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                 if i < 20:
                     msg += f"\n{file_['name']}"
         if len(ui.result_file_ids) > 20:
-            msg += f"\nand more. Total files: {len(ui.result_file_ids)}"
+            msg += "\n" + _("and more. Total files:") + f" {len(ui.result_file_ids)}"
         Message(self.app, _("Files selected by attributes"), msg).exec()
         self.ui.pushButton_file_attributes.setIcon(qta.icon('mdi6.variable-box', options=[{'scale_factor': 1.3}]))
         self.ui.pushButton_file_attributes.setToolTip(msg)
@@ -465,6 +473,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
 
         self.ui.checkBox_hide_blanks.setChecked(False)
         self.ui.splitter.setSizes([500, 0])
+        # Keep name/id lookups aligned with the current selected_codes order.
+        # transpose_data re-sorts selected_codes, so a later recalculation would
+        # otherwise index the matrices with the stale order and misplace counts.
+        self._rebuild_selected_code_strings()
         self.result_relations = []
         self.calculate_relations(self.code_ids_str)
         self.calculate_image_relations(self.code_ids_str)
@@ -592,10 +604,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
     def view_graph(self):
         """ Exports a high-resolution image of the co-occurrence graph. """
 
-        '''if not HAS_NETWORK_LIBS:
+        if not HAS_NETWORK_LIBS:
             Message(self.app, _("Missing Libraries"),
                     _("'networkx' and 'matplotlib' are required to export graphs.")).exec()
-            return'''
+            return
         filename = "Cooccurrence_graph.png"
         export_dir = ExportDirectoryPathDialog(self.app, filename)
         filepath = export_dir.filepath
@@ -625,7 +637,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         title += self.subtitle_attributes_selected + " " + self.subtitle_files_selected + " "
         title += self.subtitle_codes_selected + " " + self.subtitle_categories_selected
         ax.set_title(title, fontsize=16, fontweight='bold')
-        pos = nx.spring_layout(graph, k=0.8, iterations=50)
+        pos = nx.spring_layout(graph, k=0.8, iterations=50, seed=8)
         weights = [graph[u][v]['weight'] for u, v in graph.edges()]
         max_weight = max(weights) if weights else 1
         normalized_weights = [(w / max_weight) * 4 + 1 for w in weights]
@@ -643,8 +655,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         try:
             plt.savefig(filepath, dpi=300, bbox_inches='tight')
             plt.close(fig)
-            msg = f"Image successfully exported to:\n{filepath}"
-            Message(self.app, "Export Successful", msg, "information").exec()
+            msg = _("Image successfully exported to:") + f"\n{filepath}"
+            Message(self.app, _("Export successful"), msg, "information").exec()
             self.parent_textEdit.append(msg)
         except Exception as e:
             logger.error(f"Error exporting graph: {e}")
@@ -700,11 +712,11 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         Each group is given a unique colour.
         """
 
-        '''if not HAS_NETWORK_LIBS:
+        if not HAS_NETWORK_LIBS:
             Message(self.app, _("Missing Libraries"),
                     _("'networkx' and 'matplotlib' are required for cluster analysis.")).exec()
-            return'''
-            
+            return
+
         filename = "Community_clusters_graph.png"
         export_dir = ExportDirectoryPathDialog(self.app, filename)
         filepath = export_dir.filepath
@@ -713,7 +725,9 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
 
         visible_indices = [i for i in range(len(self.selected_codes)) if not self.ui.tableWidget.isRowHidden(i) or
                            not self.ui.tableWidget.isColumnHidden(i)]
-        if not visible_indices: return
+        if not visible_indices:
+            Message(self.app, _("No data"), _("There are no visible codes to plot.")).exec()
+            return
 
         graph = nx.Graph()
         for i in visible_indices: graph.add_node(self.selected_codes[i]['name'])
@@ -726,7 +740,9 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                     graph.add_edge(source, target, weight=count)
                     graph[source][target]['distance'] = 1.0 / count
                     
-        if graph.number_of_nodes() == 0 or graph.number_of_edges() == 0: return
+        if graph.number_of_nodes() == 0 or graph.number_of_edges() == 0:
+            Message(self.app, _("No data"), _("There are no co-occurrences to plot.")).exec()
+            return
 
         weights_list = [d['weight'] for u, v, d in graph.edges(data=True)]
         mean_w = sum(weights_list) / len(weights_list) if weights_list else 0
@@ -737,13 +753,13 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
             if d['weight'] >= mean_w: graph_strong.add_edge(u, v, weight=d['weight'])
 
         try:
-            communities = list(louvain_communities(graph_strong, weight='weight'))
+            communities = list(louvain_communities(graph_strong, weight='weight', seed=8))
         except Exception as err:
-            print(err)
+            logger.debug(err)
             try:
                 communities = list(greedy_modularity_communities(graph_strong, weight='weight'))
             except Exception as err:
-                print(err)
+                logger.debug(err)
                 communities = [list(graph.nodes())]
             
         node_community = {}
@@ -758,10 +774,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         ax.set_title(title, fontsize=16, fontweight='bold')
         try:
             if nx.is_connected(graph): pos = nx.kamada_kawai_layout(graph, weight='distance')
-            else: pos = nx.spring_layout(graph, k=1.2, weight='weight', iterations=80)
+            else: pos = nx.spring_layout(graph, k=1.2, weight='weight', iterations=80, seed=8)
         except Exception as err:
-            print(err)
-            pos = nx.spring_layout(graph, k=1.2, weight='weight', iterations=80)
+            logger.debug(err)
+            pos = nx.spring_layout(graph, k=1.2, weight='weight', iterations=80, seed=8)
         weights = [graph[u][v]['weight'] for u, v in graph.edges()]
         max_weight = max(weights) if weights else 1
         normalized_weights = [(w / max_weight) * 4 + 1 for w in weights]
@@ -793,8 +809,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         try:
             plt.savefig(filepath, dpi=300, bbox_inches='tight')
             plt.close(fig)
-            msg = f"Cluster image successfully exported to:\n{filepath}"
-            Message(self.app, "Export Successful", msg, "information").exec()
+            msg = _("Cluster image successfully exported to:") + f"\n{filepath}"
+            Message(self.app, _("Export successful"), msg, "information").exec()
             self.parent_textEdit.append(msg)
         except Exception as e:
             logger.error(f"Error exporting clusters: {e}")
@@ -805,10 +821,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         Export the network to GraphML format to open natively in Gephi using NetworkX.
         """
 
-        '''if not HAS_NETWORK_LIBS:
+        if not HAS_NETWORK_LIBS:
             Message(self.app, _("Missing Library"), _("networkx is required to export to Gephi.")).exec()
-            return'''
-            
+            return
+
         filename = "Network_Coocurrence.graphml"
         export_dir = ExportDirectoryPathDialog(self.app, filename)
         filepath = export_dir.filepath
@@ -835,8 +851,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
 
         try:
             nx.write_graphml(graph, filepath)
-            msg = f"File successfully exported as GrapgML format for Gephi:\n{filepath}"
-            Message(self.app, "Successful Export", msg, "information").exec()
+            msg = _("File successfully exported as GraphML format for Gephi:") + f"\n{filepath}"
+            Message(self.app, _("Export successful"), msg, "information").exec()
             self.parent_textEdit.append(msg)
         except Exception as err:
             logger.error(f"Error exportando a Gephi: {err}")
@@ -851,18 +867,26 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         if filepath is None:
             return
 
+        # Same visibility rule as the graph exports: with "hide blanks" active,
+        # only the visible codes and their sub-matrix are exported.
+        visible_indices = [i for i in range(len(self.selected_codes)) if not self.ui.tableWidget.isRowHidden(i) or
+                           not self.ui.tableWidget.isColumnHidden(i)]
+        if not visible_indices:
+            Message(self.app, _("No data"), _("There are no visible codes to export.")).exec()
+            return
+
         # Excel vertical and horizontal headers
         header = []
-        for code_ in self.selected_codes:  # self.codes:
+        for i in visible_indices:
+            code_ = self.selected_codes[i]
             name_split_50 = [code_['name'][y - 50:y] for y in range(50, len(code_['name']) + 50, 50)]
-            # header_labels.append(code_['name'])  # OLD, need line separators
             header.append("\n".join(name_split_50))
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Counts"
         wb.create_sheet("Details")
         ws2 = wb["Details"]
-        for col in range(len(self.codes)):
+        for col in range(len(visible_indices)):
             ws.column_dimensions[get_column_letter(col + 1)].width = 20
             ws2.column_dimensions[get_column_letter(col + 1)].width = 20
         for col, col_name in enumerate(header):
@@ -875,9 +899,10 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
             v_cell2 = ws2.cell(row=col + 2, column=1)
             v_cell2.value = col_name
         # Co-occurrence counts
-        for row, row_data in enumerate(self.data_counts):
-            for col, col_data in enumerate(row_data):
-                cell = ws.cell(row=row + 2, column=col + 2)
+        for x_row, row in enumerate(visible_indices):
+            for x_col, col in enumerate(visible_indices):
+                col_data = self.data_counts[row][col]
+                cell = ws.cell(row=x_row + 2, column=x_col + 2)
                 cell.value = col_data
                 if self.data_colors[row][col] != "":
                     cell.fill = PatternFill(start_color=self.data_colors[row][col][1:],
@@ -897,7 +922,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                     details += f"Coders: {data[8]}. (ctid0: {data[2]} | ctid1: {data[5]})\n"
                     details += f"File (fid {data[6]}): {data[7]}\n"
                     details += f"{data[13]}[[{data[14]}]]{data[15]}\n========\n"
-                d_cell = ws2.cell(row=row + 2, column=col + 2)
+                d_cell = ws2.cell(row=x_row + 2, column=x_col + 2)
                 d_cell.value = details
 
         wb.save(filepath)
@@ -1084,8 +1109,12 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                                                                                    memo, now_date, None))
                     self.app.conn.commit()
                 except Exception as e_:
-                    print(e_)
                     logger.debug(e_)
+            # Notify other dialogs (code trees, reports) about the new code and codings,
+            # and refresh this report so the new code appears in the matrix.
+            self.app.project_events.emit_table_changes(["code_name", "code_text", "code_image"], self)
+            self._refresh_selected_codes_from_project()
+            self.process_data()
 
     def transpose_data(self):
         """ Reverse code name order for headings and table """
@@ -1157,6 +1186,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
             code_ids_str (String): comma separated code ids
         """
 
+        if not code_ids_str:
+            return  # No selected codes; "in ()" is invalid in older SQLite
         selected_relations = ['E', 'I', 'O']
         if self.file_ids_names is None:
             self.file_ids_names = self.app.get_text_filenames()
@@ -1216,6 +1247,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
             code_ids_str (String): comma separated code ids
         """
 
+        if not code_ids_str:
+            return  # No selected codes; "in ()" is invalid in older SQLite
         selected_relations = ['E', 'I', 'O']
         cur = self.app.conn.cursor()
         sql = "select code_image.id, code_image.cid, x1, y1, width, height, imid, " \
