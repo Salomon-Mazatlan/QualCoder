@@ -2732,6 +2732,9 @@ def gui():
     if platform.system() == "Windows" and settings.get('stylesheet') == "native":
         # Avoid early native Windows style initialization crashes in Qt before our later Fusion fallback runs.
         os.environ.setdefault("QT_STYLE_OVERRIDE", "Fusion")
+    # Native video frame must not force sibling widgets native
+    QtWidgets.QApplication.setAttribute(
+        QtCore.Qt.ApplicationAttribute.AA_DontCreateNativeWidgetSiblings)
     app = QtWidgets.QApplication(sys.argv)
     app._qc_installed_translators = []
     # Noto Sans - for general application
