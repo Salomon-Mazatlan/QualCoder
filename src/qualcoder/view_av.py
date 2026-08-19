@@ -396,6 +396,11 @@ class DialogViewAV(QtWidgets.QDialog):
         # Frame goes native lazily (winId() in _set_video_output, VLC only);
         # the guard keeps ancestors alien
         self.ui.frame_video.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
+        if not hasattr(self.mediaplayer, 'set_video_host'):
+            # VLC backend: realize the native window now, before the dialog shows,
+            # so the initial layout pass positions the HWND (created lazily it
+            # sits at the top-level's 0,0 until a geometry event arrives)
+            self.ui.frame_video.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow, True)
         self.ui.pushButton_detach.setIcon(qta.icon('mdi6.open-in-new'))
         self.ui.pushButton_detach.setToolTip(_("Detach video to a window"))
         self.ui.pushButton_detach.pressed.connect(self.toggle_detach_video)
@@ -492,6 +497,13 @@ class DialogViewAV(QtWidgets.QDialog):
         # Guard before winId(): ancestors stay alien
         target.setAttribute(QtCore.Qt.WidgetAttribute.WA_DontCreateNativeAncestors, True)
         winid = int(target.winId())
+        # Place the native child window at the frame's geometry NOW: created lazily
+        # it sits at the top-level's (0,0) until a geometry event arrives, and VLC
+        # binds its video output to whatever position the HWND has at that moment
+        wh = target.windowHandle()
+        if wh is not None and target.isVisible():
+            top_left = target.mapTo(target.window(), QtCore.QPoint(0, 0))
+            wh.setGeometry(QtCore.QRect(top_left, target.size()))
         system = platform.system()
         if system == "Linux":
             self.mediaplayer.set_xwindow(winid)
@@ -529,6 +541,9 @@ class DialogViewAV(QtWidgets.QDialog):
                         old_mp.set_nsobject(0)
                     else:
                         old_mp.set_xwindow(0)
+                    # release() destroys the old player AND its video output window;
+                    # without it a lingering vout can stay frozen at the screen corner
+                    old_mp.release()
         except Exception:
             pass
         try:
