@@ -1276,7 +1276,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                 os.mkdir(html_folder_path + "/video")
             except Exception as err:
                 logger.warning(_("html folder creation error ") + str(err))
-                Message(self.app, _("Folder creation"), f"{html_folder_path} {_('error ')} {err}", "critical").exec()
+                Message(self.app, _("Folder creation"), f"{html_folder_path} " + _('error ') + f" {err}", "critical").exec()
                 return
         try:
             with open(filepath, 'r') as f:
@@ -1347,7 +1347,7 @@ class DialogReportCodes(QtWidgets.QDialog):
             f.write(html)
         msg = _("Report exported to: ") + filepath
         if need_media_folders:
-            msg += f"\n{_('Media folder:')} {html_folder_path}"
+            msg += "\n" + _('Media folder:') + f" {html_folder_path}"
         self.parent_textEdit.append(msg)
         Message(self.app, _('Report exported'), msg, "information").exec()
 
@@ -1497,11 +1497,11 @@ class DialogReportCodes(QtWidgets.QDialog):
         self.ui.textEdit.append(file_txt)
         self.ui.textEdit.append("==========")
         for a in annotes:
-            txt = f"\n{_('File')}: {a['filename']} anid: {a['anid']} "
-            txt += f"{_('DATE:')} {a['date'][0:10]} {_('Coder:')} {a['owner']}, "
-            txt += f"{_('Position')}: {a['pos0']} - {a['pos1']}\n"
-            txt += f"{_('TEXT')}: {a['text']}\n"
-            txt += f"{_('ANNOTATION')}: {a['annotation']}"
+            txt = "\n" + _('File') + f": {a['filename']} anid: {a['anid']} "
+            txt += _('DATE:') + f" {a['date'][0:10]} " + _('Coder:') + f" {a['owner']}, "
+            txt += _('Position') + f": {a['pos0']} - {a['pos1']}\n"
+            txt += _('TEXT') + f": {a['text']}\n"
+            txt += _('ANNOTATION') + f": {a['annotation']}"
             self.ui.textEdit.append(txt)
         self.ui.comboBox_export.setEnabled(True)
 
@@ -1608,22 +1608,22 @@ class DialogReportCodes(QtWidgets.QDialog):
         self.ui.textEdit.insertPlainText(_("Search parameters") + "\n==========\n")
         coder = self.ui.comboBox_coders.currentText()
         if coder == "":
-            self.ui.textEdit.insertPlainText(f"{_('Coding by: All coders')}\n")
+            self.ui.textEdit.insertPlainText(_('Coding by: All coders') + "\n")
         else:
-            self.ui.textEdit.insertPlainText(f"{_('Coding by: ')}{coder}\n")
-        codes_string = f"{_('Codes: ')}\n"
+            self.ui.textEdit.insertPlainText(_('Coding by: ') + f"{coder}\n")
+        codes_string = _('Codes: ') + "\n"
         codes_count = 0
         for i in items:
             if i.text(1)[0:3] == 'cid':
                 codes_count += 1
                 codes_string += i.text(0) + ". "
-        codes_string += f"{_('Codes: ')}{codes_count} / {len(self.code_names)}"
+        codes_string += _('Codes: ') + f"{codes_count} / {len(self.code_names)}"
         self.ui.textEdit.insertPlainText(codes_string)
 
         cur = self.app.conn.cursor()
         parameters_display = ""
         if self.attributes:
-            parameters_display += f"\n{_('Attributes:')}\n {self.attributes_msg}\n"
+            parameters_display += "\n" + _('Attributes:') + f"\n {self.attributes_msg}\n"
             if not (self.attribute_file_ids and self.attribute_case_ids):
                 parameters_display += "No cases or files match attribute selection\n"
         if self.attribute_file_ids or self.attribute_case_ids:
@@ -1647,7 +1647,7 @@ class DialogReportCodes(QtWidgets.QDialog):
             res = cur.fetchall()
             for r in res:
                 parameters_display += f"{r[0]}, "
-            parameters_display += f"{_(' Files: ')} {len(res)} / {len(self.files)}"
+            parameters_display += _(' Files: ') + f" {len(res)} / {len(self.files)}"
         if self.case_ids_string != "":
             parameters_display += _("\nCases:\n")
             cur.execute(f"select name from cases where caseid in ({self.case_ids_string}) order by name")
@@ -1656,7 +1656,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                 parameters_display += f"{r[0]}, "
         self.ui.textEdit.insertPlainText(f"{parameters_display}\n")
         if self.ui.lineEdit.text() != "":
-            self.ui.textEdit.insertPlainText(f"\n{_('Search text: ')} {self.ui.lineEdit.text()}\n")
+            self.ui.textEdit.insertPlainText("\n" + _('Search text: ') + f" {self.ui.lineEdit.text()}\n")
         self.ui.textEdit.insertPlainText("\n==========\n")
 
         # Get selected codes as comma separated String of cids
@@ -2083,8 +2083,8 @@ class DialogReportCodes(QtWidgets.QDialog):
                 final_stats.append(st)
         msg = _("Text code statistics:")
         for st in final_stats:
-            msg += f"\n{st['codename']} | {st['filename']} | {_('Count:')} {st['codecount']} | "
-            msg += f"{_('Percent of file:')} {st['percent']}%"
+            msg += f"\n{st['codename']} | {st['filename']} | " + _('Count:') + f" {st['codecount']} | "
+            msg += _('Percent of file:') + f" {st['percent']}%"
         msg += "\n========"
         if len(final_stats) == 0:
             msg = ""
@@ -2165,8 +2165,8 @@ class DialogReportCodes(QtWidgets.QDialog):
                 final_stats.append(st)
         msg = _("Image code statistics:")
         for st in final_stats:
-            msg += f"\n{st['codename']} | {st['filename']} | {_('Count:')} {st['codecount']} | "
-            msg += f"{_('Percent of file:')} {st['percent']}%"
+            msg += f"\n{st['codename']} | {st['filename']} | " + _('Count:') + f" {st['codecount']} | "
+            msg += _('Percent of file:') + f" {st['percent']}%"
         msg += "\n========"
         if len(final_stats) == 0:
             msg = ""
@@ -2240,9 +2240,9 @@ class DialogReportCodes(QtWidgets.QDialog):
                 final_stats.append(st)
         msg = _("A/V code statistics:")
         for st in final_stats:
-            msg += f"\n{st['codename']} | {st['filename']} | {_('Count:')} {st['codecount']} | "
+            msg += f"\n{st['codename']} | {st['filename']} | " + _('Count:') + f" {st['codecount']} | "
             if not erroneous_msecs:
-                msg += f"{_('Percent of file:')} {st['percent']}%"
+                msg += _('Percent of file:') + f" {st['percent']}%"
             else:
                 msg += _("Percent of file: Unknown. Either VLC not installer or file not found.")
         msg += "\n========"
@@ -2282,7 +2282,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                     count += s['codecount']
             msg += "\n" + c + " : " + str(count)
             total_count += count
-        msg = f"{_('Code count totals')}: {total_count}\n============{msg}"
+        msg = _('Code count totals') + f": {total_count}\n============{msg}"
         msg += "\n============"
         self.ui.textEdit.append(msg)
         if text_msg != "":
@@ -2397,7 +2397,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                 if memo_key != "only_coded":
                     self.ui.textEdit.insertPlainText("\n")
                 if row['coded_memo'] != "" and memo_key in ("also_code", "also_coded", "also_all"):  # also_all shows coded_memo
-                    self.ui.textEdit.insertPlainText(f"{_('MEMO:')} {row['coded_memo']}\n")
+                    self.ui.textEdit.insertPlainText(_('MEMO:') + f" {row['coded_memo']}\n")
             if row['result_type'] == 'image' and memo_key not in ("only_memos", "only_coded"):
                 self.put_image_into_textedit(row, i, self.ui.textEdit)
             if row['result_type'] == 'av' and memo_key not in ("only_memos", "only_coded"):
@@ -2410,7 +2410,7 @@ class DialogReportCodes(QtWidgets.QDialog):
             if memo_key not in ("only_memos", "only_coded"):  # hide co-occurrences in memo-only modes
                 overlaps = self.get_cooccurring_codes(row)  # Adds ctids, imids, avids of the overlaps as Dict{[list]}
                 if overlaps:
-                    self.ui.textEdit.insertPlainText(f"{_('Overlapping codes:')} [{', '.join(overlaps)}]\n")
+                    self.ui.textEdit.insertPlainText(_('Overlapping codes:') + f" [{', '.join(overlaps)}]\n")
 
             self.text_links.append(row)
         self.eventFilterTT.set_positions(self.text_links)
@@ -2868,10 +2868,11 @@ class DialogReportCodes(QtWidgets.QDialog):
                 cur.execute("update code_av set cid=? where avid=?", [replacement_code['cid'], existing_code['avid']])
             self.app.conn.commit()
         except sqlite3.IntegrityError:
-            Message(self.app, "Cannot change code", "This is already marked with the selected code").exec()
+            Message(self.app, _("Cannot change code"),
+                    _("This is already marked with the selected code")).exec()
             return
         self.emit_coding_change(existing_code['result_type'])
-        Message(self.app, "Changed code", "Run report again to update display").exec()
+        Message(self.app, _("Changed code"), _("Run report again to update display")).exec()
         self.app.delete_backup = False
         # Remove widgets from coding layout
         contents = self.tab_coding.layout()
@@ -2926,10 +2927,11 @@ class DialogReportCodes(QtWidgets.QDialog):
 
             self.app.conn.commit()
         except sqlite3.IntegrityError:
-            Message(self.app, "Cannot change code", "This is already marked with the selected code").exec()
+            Message(self.app, _("Cannot change code"),
+                    _("This is already marked with the selected code")).exec()
             return
         self.emit_coding_change(existing_code['result_type'])
-        Message(self.app, "Changed code", "Run report again to update display").exec()
+        Message(self.app, _("Changed code"), _("Run report again to update display")).exec()
         self.app.delete_backup = False
         # Remove widgets from coding layout
         contents = self.tab_coding.layout()
@@ -2943,7 +2945,7 @@ class DialogReportCodes(QtWidgets.QDialog):
         Args:
             code : Dictionary of codenmae, color, file_or_casename, pos0, pos1, text, coder, fid, ctid, cid, result_type"""
 
-        coded = f"{_('Delete coded section.')} {code['codename']}. {code['coder']}"
+        coded = _('Delete coded section.') + f" {code['codename']}. {code['coder']}"
         ui = DialogConfirmDelete(self.app, coded, _("Delete coded section"))
         ok = ui.exec()
         if not ok:
@@ -3059,9 +3061,9 @@ class DialogReportCodes(QtWidgets.QDialog):
         if memo_choice in ("also_all", "also_code", "only_memos") and item['codename_memo'] != "":
             # A real newline, not <br />: inserted with append as plain text
             head += _("CODE MEMO: ") + f"{item['codename_memo']}\n"
-        head += f"{_('File:')} {filename}, "
+        head += _('File:') + f" {filename}, "
         if memo_choice in ("also_all", "only_memos") and item['source_memo'] != "":  # typo 'alll' -> 'all'
-            head += f" {_('FILE MEMO:')} {item['source_memo']}"
+            head += " " + _('FILE MEMO:') + f" {item['source_memo']}"
         if item['file_or_case'] == 'Case':  # removed stray colon in 'Case:'
             head += f" {item['file_or_case']}: {item['file_or_casename']}, "
             if memo_choice in ("also_all", "only_memos"):
@@ -3069,7 +3071,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                 cur.execute("select ifnull(memo,'') from cases where name=?", [item['file_or_casename']])
                 res = cur.fetchone()
                 if res is not None and res[0] != "":  # was res != "", should be res[0]
-                    head += f", {_('CASE MEMO:')} {res[0]}"
+                    head += ", " + _('CASE MEMO:') + f" {res[0]}"
         head += item['coder']
         cursor = text_edit.textCursor()
         fmt = QtGui.QTextCharFormat()
@@ -3312,7 +3314,7 @@ class DialogReportCodes(QtWidgets.QDialog):
                                 self.te[row][col].append(r['text'])
                                 if memo_choice in ("also_all", "also_coded") and r[
                                     'coded_memo'] != "":
-                                    self.te[row][col].append(f"{_('MEMO:')} {r['coded_memo']}")
+                                    self.te[row][col].append(_('MEMO:') + f" {r['coded_memo']}")
                                 self.te[row][col].insertPlainText("\n")
                             if r['result_type'] == 'image' and memo_choice in ("only_memos", "only_coded"):
                                 self.te[row][col].append(r['coded_memo'])
