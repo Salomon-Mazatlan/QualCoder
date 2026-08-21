@@ -138,7 +138,7 @@ class CodeOrganiser(QDialog):
                   "\n"
                   "Potential for unexpected errors could occur.\n"
                   "THERE IS NO UNDO OPTION AFTER APPLYING CHANGES WITH THE APPLY BUTTON.")
-        Message(self.app, "Code organiser", text_).exec()
+        Message(self.app, _("Code organiser"), text_).exec()
 
     def _emit_project_table_changes(self, tables):
         """Notify other open dialogs about changed project tables."""
