@@ -184,7 +184,7 @@ class RqdaImport:
                 i += 1
             except sqlite3.IntegrityError:
                 pass
-        self.parent_textEdit.append(str(i) + " codes imported")
+        self.parent_textEdit.append(str(i) + " " + _("codes imported"))
         r_cur.execute("select cid, fid, seltext,selfirst,selend,memo, owner, date from coding")
         res = r_cur.fetchall()
         i = 0
