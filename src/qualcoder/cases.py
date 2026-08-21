@@ -431,7 +431,7 @@ class DialogCases(QtWidgets.QDialog):
         self._emit_project_table_changes(["attribute_type", "attribute"])
         self.load_cases_data()
         self.fill_table()
-        self.parent_text_edit.append(_("Attribute added to cases: ") + f"{name}, {_('type:')} {value_type}")
+        self.parent_text_edit.append(_("Attribute added to cases: ") + f"{name}, " + _('type:') + f" {value_type}")
         self.app.delete_backup = False
 
     def import_cases_and_attributes(self):
@@ -691,7 +691,7 @@ class DialogCases(QtWidgets.QDialog):
                     cur.execute("delete from case_text where caseid=?", [id_])
                     cur.execute("delete from attribute where id=? and attr_type='case'", [id_])
                     self.app.conn.commit()
-                    self.parent_text_edit.append(f"Case deleted: {c['name']}")
+                    self.parent_text_edit.append(_("Case deleted: ") + c['name'])
         self.load_cases_data()
         self.app.delete_backup = False
         self.fill_table()
@@ -1064,7 +1064,7 @@ class DialogCases(QtWidgets.QDialog):
                   'attr_type="case"'
             cur.execute(sql, [attribute_name])
             res = cur.fetchone()
-            tt = f"{_('Minimum:')} {res[0]}\n{_('Maximum:')} {res[1]}"
+            tt = _('Minimum:') + f" {res[0]}\n" + _('Maximum:') + f" {res[1]}"
         if value_type == "character":
             sql = 'select distinct value from attribute where name=? and attr_type="case" and length(value)>0 limit 10'
             cur.execute(sql, [attribute_name])
@@ -1134,7 +1134,7 @@ class DialogCases(QtWidgets.QDialog):
         cursor = self.ui.textBrowser.textCursor()
         for c in display_text:
             if c['mediapath'] is None or c['mediapath'] == '' or c['mediapath'][:5] == "docs:":  # text source
-                header = f"\n{_('File:')} {c['name']}, {_('Characters:')} {c['pos1']} - {c['pos0']}"
+                header = "\n" + _('File:') + f" {c['name']}, " + _('Characters:') + f" {c['pos1']} - {c['pos0']}"
                 pos0 = len(self.ui.textBrowser.toPlainText())
                 self.ui.textBrowser.append(header)
                 cursor.setPosition(pos0, QtGui.QTextCursor.MoveMode.MoveAnchor)
@@ -1149,7 +1149,7 @@ class DialogCases(QtWidgets.QDialog):
                 cursor.setCharFormat(format_reg)
 
             if c['mediapath'][:7] in ("/images", "images:"):
-                header = f"\n{_('Image:')} {c['name']}"
+                header = "\n" + _('Image:') + f" {c['name']}"
                 pos0 = len(self.ui.textBrowser.toPlainText())
                 self.ui.textBrowser.append(header)
                 cursor.setPosition(pos0, QtGui.QTextCursor.MoveMode.MoveAnchor)
@@ -1161,7 +1161,7 @@ class DialogCases(QtWidgets.QDialog):
                 self.display_text_links.append(data)
 
             if c['mediapath'][:6] in ("/audio", "audio:", "/video", "video:"):
-                header = f"\n{_('AV media:')} {c['name']}"
+                header = "\n" + _('AV media:') + f" {c['name']}"
                 pos0 = len(self.ui.textBrowser.toPlainText())
                 self.ui.textBrowser.append(header)
                 cursor.setPosition(pos0, QtGui.QTextCursor.MoveMode.MoveAnchor)
