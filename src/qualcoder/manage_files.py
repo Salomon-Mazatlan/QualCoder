@@ -838,7 +838,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                     found = True
                     break
             if not found:
-                warning += f"Column name not found: {colname}\n"
+                warning += _("Column name not found: ") + f"{colname}\n"
         if warning:
             Message(self.app, _("Table column not present"), warning).exec()
 
@@ -1589,9 +1589,9 @@ class DialogManageFiles(QtWidgets.QDialog):
             try:
                 cur.execute("update source set name=? where name=?", [new_name, existing_name])
                 self.app.conn.commit()
-                msg += f'{_("Renamed database file entry:")} {existing_name} -> {new_name}\n'
+                msg += _("Renamed database file entry:") + f' {existing_name} -> {new_name}\n'
             except sqlite3.IntegrityError:
-                err_msg += f'_("Bulk Rename. Not renamed in use:") {existing_name}\n'
+                err_msg += _("Bulk Rename. Not renamed in use:") + f" {existing_name}\n"
 
             # Logging and tracking the renamed entry
             entry = {'old_name': existing_name, 'name': new_name, 'fid': fid}
@@ -1667,7 +1667,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             file_directory = "documents"
             mediapath = "/documents/" + name
             destination = Path(directory) / name
-        msg = f'{_("Export to")} {destination}\n'
+        msg = _("Export to") + f' {destination}\n'
         try:
             move(self.app.project_path + mediapath, destination)
         except Exception as err:
@@ -2112,7 +2112,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         # Get case names linked to the file
         txt = self.get_cases_by_filename(res[0])
         if txt != "":
-            metadata += f'\n{_("Case linked:")}\n{txt}'
+            metadata += '\n' + _("Case linked:") + f'\n{txt}'
         return icon, metadata, ""
 
     def get_cases_by_filename(self, name: str):
@@ -2182,7 +2182,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self._emit_project_table_changes(["attribute_type", "attribute"])
         self.load_file_data()
         self.fill_table()
-        self.parent_text_edit.append(f'{_("Attribute added to files:")} {name}, {_("type")}: {value_type}')
+        self.parent_text_edit.append(_("Attribute added to files:") + f' {name}, ' + _("type") + f': {value_type}')
 
     def cell_double_clicked(self):
         """ View file """
@@ -3256,9 +3256,9 @@ class DialogManageFiles(QtWidgets.QDialog):
                     rtf = sourcefile.read()
                     text_ = rtf_to_text(rtf)
                 except Exception as err:
-                    msg = "Importing rtf. Expecting characters encoded as latin-1. Import failed."
+                    msg = _("Importing rtf. Expecting characters encoded as latin-1. Import failed.")
                     logger.debug(f"rtf_to_text error Not Latin-1: {err}")
-                    Message(self.app, "rtf to text error", msg).exec()
+                    Message(self.app, _("rtf to text error"), msg).exec()
         # Import from epub
         if import_file[-5:].lower() == ".epub":
             # Extraction shared with the reference attachment import.
@@ -3332,7 +3332,8 @@ class DialogManageFiles(QtWidgets.QDialog):
         # Import of text file did not work
         if text_ == "":
             Message(self.app, _("Warning"),
-                    _("Cannot import ") + str(import_file) + "\nPlease check if the file is empty.", "warning").exec()
+                    _("Cannot import ") + str(import_file) + "\n" + _("Please check if the file is empty."),
+                    "warning").exec()
             return False
         # Normalise line endings and strip BOM: Qt converts \r\n/\r to \n on
         # setPlainText, so mismatches make stored positions drift.
