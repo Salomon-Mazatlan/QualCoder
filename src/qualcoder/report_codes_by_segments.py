@@ -264,7 +264,7 @@ class DialogCodesBySegments(QtWidgets.QDialog):
                 if i < 20:
                     msg += f"\n{file_['name']}"
         if len(ui.result_file_ids) > 20:
-            msg += f"\nand more. Total files: {len(ui.result_file_ids)}"
+            msg += "\n" + _("and more. Total files: ") + str(len(ui.result_file_ids))
         Message(self.app, _("Files selected by attributes"), msg).exec()
 
         for i in range(self.ui.listWidget_files.count()):
