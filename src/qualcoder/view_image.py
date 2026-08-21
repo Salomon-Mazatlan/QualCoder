@@ -883,7 +883,7 @@ class DialogCodeImage(QtWidgets.QDialog):
         self.ui.pushButton_previous_page.setEnabled(active)
 
     def goto_page(self):
-        text, ok = QtWidgets.QInputDialog.getInt(None, 'Go to page', f'1 - {self.pdf_total_pages}')
+        text, ok = QtWidgets.QInputDialog.getInt(None, _('Go to page'), f'1 - {self.pdf_total_pages}')
         if not ok or not text:
             return
         self.pdf_page = int(text) - 1
@@ -919,7 +919,7 @@ class DialogCodeImage(QtWidgets.QDialog):
         """
 
         self.degrees = 0
-        self.ui.label_coded_area.setText("Coded area")
+        self.ui.label_coded_area.setText(_("Coded area"))
         self.ui.label_coded_area.setToolTip("")
         image = None
         source_path = ""
