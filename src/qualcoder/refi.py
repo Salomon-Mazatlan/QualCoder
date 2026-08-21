@@ -1497,7 +1497,7 @@ class RefiImport:
                 logger.warning(f"source name duplicated. Adding prefix: {name}")
                 self.source_name_prefix += 1
                 name = f"{self.source_name_prefix}_{name}"
-                self.parent_textedit.append(f"source name duplicated. Adding prefix: {name}")
+                self.parent_textedit.append(_("source name duplicated. Adding prefix: ") + name)
                 break
         if pdf_rep_name != "":
             # contains .pdf
@@ -1963,7 +1963,7 @@ class RefiImport:
         self.base_path = element.get("basePath")
         # print("BASEPATH ", self.base_path)
         self.software_name = element.get("origin")
-        self.parent_textedit.append(f"QDPX created with: {self.software_name}")
+        self.parent_textedit.append(_("QDPX created with: ") + str(self.software_name))
         if self.base_path is None and "ATLAS" in self.software_name.upper():  # Create relative path to the QDPX folder
             # self.folder name is: qpdx_project_name._temporary
             self.base_path = self.folder_name[: -11] + " Media"  # Remove ._temporary, and add Media
