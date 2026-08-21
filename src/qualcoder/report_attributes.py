@@ -679,7 +679,7 @@ class DialogSelectAttributeParameters(QtWidgets.QDialog):
             sql = "select min(cast(value as real)), max(cast(value as real)) from attribute where name=? and attr_type=?"
             cur.execute(sql, [name, case_or_file])
             res = cur.fetchone()
-            tt = f'{_("Minimum:")} {res[0]}\n{_("Maximum:")} {res[1]}'
+            tt = _("Minimum:") + f' {res[0]}\n' + _("Maximum:") + f' {res[1]}'
         if valuetype == "character":
             sql = "select distinct value from attribute where name=? and attr_type=? and length(value)>0 limit 20"
             cur.execute(sql, [name, case_or_file])
