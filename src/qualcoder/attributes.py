@@ -149,7 +149,7 @@ class DialogManageAttributes(QtWidgets.QDialog):
         self.app.conn.commit()
         self._emit_project_table_changes(["attribute_type", "attribute"])
         self.fill_table_widget()
-        self.parent_textEdit.append(f"{_('Attribute added: ')}{item['name']} -> {_(case_or_file)}")
+        self.parent_textEdit.append(_('Attribute added: ') + f"{item['name']} -> {_(case_or_file)}")
 
     def delete_attribute(self):
         """ When delete button pressed, attribute is deleted from database. """
