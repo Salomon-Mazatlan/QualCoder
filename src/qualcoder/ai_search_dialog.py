@@ -197,14 +197,14 @@ class DialogAiSearch(QtWidgets.QDialog):
         self.ui.setupUi(self)
         # adapt UI to context
         if context == 'search':
-            self.setWindowTitle('AI Search')
+            self.setWindowTitle(_('AI Search'))
             self.ui.label_what.setText(_('1) What do you want to search for?'))
             self.ui.tabWidget.setTabVisible(0, True)  # code search
             self.ui.tabWidget.setTabVisible(1, True)  # free search
             self.ui.checkBox_coded_segments.setVisible(True)
             self.ui.widget_coder.setVisible(False)
         elif context == 'code_analysis':
-            self.setWindowTitle('AI Code Analysis')
+            self.setWindowTitle(_('AI Code Analysis'))
             self.ui.label_what.setText(_('1) Which codes or categories do you want to analyze?'))
             self.ui.tabWidget.setCurrentIndex(0)
             self.ui.tabWidget.setTabVisible(0, True)  # code search
@@ -212,7 +212,7 @@ class DialogAiSearch(QtWidgets.QDialog):
             self.ui.checkBox_coded_segments.setVisible(False) 
             self.ui.widget_coder.setVisible(True)
         elif context == 'topic_exploration':
-            self.setWindowTitle('AI Topic Exploration')
+            self.setWindowTitle(_('AI Topic Exploration'))
             self.ui.label_what.setText(_('1) Which topic do you want to explore?'))
             self.ui.tabWidget.setCurrentIndex(1)
             self.ui.tabWidget.setTabVisible(0, False)  # code search
