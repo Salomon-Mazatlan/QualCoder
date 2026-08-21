@@ -244,7 +244,7 @@ class DialogJournals(QtWidgets.QDialog):
         self.app.conn.commit()
         self.load_journals()
         self.fill_table()
-        self.parent_text_edit.append(f'{_("Attribute added to journals:")} {name}, {_("type")}: {value_type}')
+        self.parent_text_edit.append(_("Attribute added to journals:") + f' {name}, ' + _("type") + f': {value_type}')
         self._emit_project_table_changes(['attribute_type', 'attribute'])
 
     def check_attribute_placeholders(self):
@@ -713,7 +713,7 @@ class DialogJournals(QtWidgets.QDialog):
             p = OdfParagraph(text=line)
             doc.text.addElement(p)
         doc.save(filepath)
-        msg = f'{_("Journal exported to:")} {filepath}'
+        msg = _("Journal exported to:") + f' {filepath}'
         Message(self.app, _("Journal export"), msg, "information").exec()
         self.parent_text_edit.append(msg)
 
