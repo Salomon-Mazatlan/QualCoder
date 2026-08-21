@@ -260,7 +260,7 @@ class DialogReportFileSummary(QtWidgets.QDialog):
             if img_res[0] > 0 and file_type == "image":
                 tt += str(img_res[0])
             if img_res[0] > 0 and file_type == "text":
-                tt += f"\nImage codings: {img_res[0]}"
+                tt += "\n" + _("Image codings: ") + str(img_res[0])
             if file_['memo'] != "":
                 tt += _("\nMemo: ") + file_['memo']
             file_['tooltip'] = tt
