@@ -2254,7 +2254,7 @@ class DialogAIChat(QtWidgets.QDialog):
             chat_idx=chat_idx,
             fallback_to_current=fallback_to_current,
         )
-        return self._message_heading_html(f'{_("AI Agent")} ({display_author}):')
+        return self._message_heading_html(_("AI Agent") + f' ({display_author}):')
             
     def fill_chat_list(self):
         self.chat_list_model.clear()
@@ -2475,7 +2475,7 @@ class DialogAIChat(QtWidgets.QDialog):
             return True
         if ask:
             msg = _('Do you really want to cancel the AI operation?')
-            msg_box = Message(self.app, 'AI Cancel', msg)
+            msg_box = Message(self.app, _('AI Cancel'), msg)
             msg_box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
             reply = msg_box.exec()
             if reply == QtWidgets.QMessageBox.StandardButton.No:
@@ -2486,7 +2486,7 @@ class DialogAIChat(QtWidgets.QDialog):
             success = bool(ai.cancel(ask=False))
         if ask and not success:
             msg = _('The AI operation could not be aborted immediately. It may take a moment for the AI to be ready again.')
-            Message(self.app, 'AI Cancel', msg).exec()
+            Message(self.app, _('AI Cancel'), msg).exec()
         self._clear_stream_preview_buffers()
         return success
 
@@ -5742,11 +5742,11 @@ data collected. This information will accompany every prompt sent to the AI, res
                 display_type = self._display_chat_type_label(analysis_type, preserve_legacy_general=True)
                 if not self._is_agent_chat_type(analysis_type):
                     html_parts.append(
-                        f"<p style={self.ai_info_style}><b>{_('Type:')}</b> {display_type}<br /><b>{_('Summary:')}</b> {summary_br}<br /><b>{_('Date:')}</b> {date}<br /><b>{_('Prompt:')}</b> {self._render_plain_text_with_prompt_refs(analysis_prompt, style_role='info')}</p>"
+                        f"<p style={self.ai_info_style}><b>" + _('Type:') + f"</b> {display_type}<br /><b>" + _('Summary:') + f"</b> {summary_br}<br /><b>" + _('Date:') + f"</b> {date}<br /><b>" + _('Prompt:') + f"</b> {self._render_plain_text_with_prompt_refs(analysis_prompt, style_role='info')}</p>"
                     )
                 else:
                     html_parts.append(
-                        f"<p style={self.ai_info_style}><b>{_('Type:')}</b> {display_type}<br /><b>{_('Summary:')}</b> {summary_br}<br /><b>{_('Date:')}</b> {date}</p>"
+                        f"<p style={self.ai_info_style}><b>" + _('Type:') + f"</b> {display_type}<br /><b>" + _('Summary:') + f"</b> {summary_br}<br /><b>" + _('Date:') + f"</b> {date}</p>"
                     )
                 # Show chat messages:
                 agent_status_lines = []
@@ -5810,7 +5810,7 @@ data collected. This information will accompany every prompt sent to the AI, res
                         author = msg[3]
                         if author is None or author == '':
                             author = 'unkown'
-                        heading = f'{_("User")} ({author}):'
+                        heading = _("User") + f' ({author}):'
                         txt = f'{self._message_heading_html(heading)}{txt}'
                         html_parts.append(f'<p style={self.ai_user_style}>{txt}</p>')
                     elif msg_type == 'ai':
