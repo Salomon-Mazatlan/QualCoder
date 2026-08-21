@@ -204,7 +204,7 @@ class DialogMemo(QtWidgets.QDialog):
                     p.addText(token)
             doc.text.addElement(p)
         doc.save(filepath)
-        Message(self.app, _("Memo export"), f'{_("Memo exported to:")} {filepath}', "information").exec()
+        Message(self.app, _("Memo export"), _("Memo exported to:") + f' {filepath}', "information").exec()
 
     def accept(self):
         """ Accepted button overridden method. """
@@ -347,9 +347,9 @@ class DialogSelectQuote(QtWidgets.QDialog):
         for r in cur.fetchall():
             pos = f"{r[2]}-{r[3]}"
             text_ = r[4] if r[4] is not None else ""
-            insert = f'**{_("CODED SEGMENT")}:** "{text_}"\n'
+            insert = '**' + _("CODED SEGMENT") + f':** "{text_}"\n'
             if r[8] != "":
-                insert += f'**{_("CODED MEMO")}:** "{r[8]}"\n'
+                insert += '**' + _("CODED MEMO") + f':** "{r[8]}"\n'
             insert += self.detail_line(f"[{pos}]", r[5], r[6], r[1], r[7],
                                        self.segment_cases(r[6], r[2], r[3]))
             self.quotes.append({"type": "text", "code": r[0], "file": r[1], "pos": pos,
@@ -357,15 +357,15 @@ class DialogSelectQuote(QtWidgets.QDialog):
         cur.execute(image_sql + where_i + order_i, params_i)
         for r in cur.fetchall():
             pos = f"x:{r[2]} y:{r[3]} w:{r[4]} h:{r[5]}"
-            insert = f'**{_("CODED MEMO")}:** "{r[6]}"\n' if r[6] != "" else ""
-            insert += self.detail_line(f'[{_("Image")} {pos}]', r[7], r[8], r[1], r[9],
+            insert = '**' + _("CODED MEMO") + f':** "{r[6]}"\n' if r[6] != "" else ""
+            insert += self.detail_line('[' + _("Image") + f' {pos}]', r[7], r[8], r[1], r[9],
                                        self.segment_cases(r[8]))
             self.quotes.append({"type": "image", "code": r[0], "file": r[1], "pos": pos,
                                 "text": r[6], "memo": r[6], "insert": insert})
         cur.execute(av_sql + where_a + order_a, params_a)
         for r in cur.fetchall():
             pos = f"{msecs_to_hours_mins_secs(r[2])} - {msecs_to_hours_mins_secs(r[3])}"
-            insert = f'**{_("CODED MEMO")}:** "{r[4]}"\n' if r[4] != "" else ""
+            insert = '**' + _("CODED MEMO") + f':** "{r[4]}"\n' if r[4] != "" else ""
             insert += self.detail_line(f"[A/V {pos}]", r[5], r[6], r[1], r[7],
                                        self.segment_cases(r[6]))
             self.quotes.append({"type": "av", "code": r[0], "file": r[1], "pos": pos,
@@ -544,7 +544,7 @@ class DialogSelectReference(QtWidgets.QDialog):
                 continue
             files_ = "; ".join(sorted(s[1] for s in self.sources if s[2] == ref['risid']))
             self.rows.append({"risid": ref['risid'], "apa": ref['apa'], "files": files_,
-                              "insert": f"**{_('REFERENCE')}:** {ref['apa']}"})
+                              "insert": "**" + _('REFERENCE') + f":** {ref['apa']}"})
         tw = self.ui.tableWidget
         tw.setRowCount(0)
         tw.setColumnCount(3)
