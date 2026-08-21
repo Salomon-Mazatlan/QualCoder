@@ -963,7 +963,7 @@ class DialogCodeInImage(QtWidgets.QDialog):
         self.draw_coded_area()
         self.ui.graphicsView.update()
         msg = _("Key + or W zoom in. Key - or Q zoom out") + "\n"
-        msg += f'{_("Scale:")} {int(self.scale * 100)}%'
+        msg += _("Scale:") + f' {int(self.scale * 100)}%'
         self.ui.horizontalSlider.setToolTip(msg)
 
     def eventFilter(self, object_, event):
