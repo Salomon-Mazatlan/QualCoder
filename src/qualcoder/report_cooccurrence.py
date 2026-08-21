@@ -307,7 +307,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                 if i < 20:
                     msg += f"\n{file_['name']}"
         if len(ui.result_file_ids) > 20:
-            msg += f"\nand more. Total files: {len(ui.result_file_ids)}"
+            msg += "\n" + _("and more. Total files: ") + str(len(ui.result_file_ids))
         Message(self.app, _("Files selected by attributes"), msg).exec()
         self.ui.pushButton_file_attributes.setIcon(qta.icon('mdi6.variable-box', options=[{'scale_factor': 1.3}]))
         self.ui.pushButton_file_attributes.setToolTip(msg)
@@ -655,8 +655,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         try:
             plt.savefig(filepath, dpi=300, bbox_inches='tight')
             plt.close(fig)
-            msg = f"Image successfully exported to:\n{filepath}"
-            Message(self.app, "Export Successful", msg, "information").exec()
+            msg = _("Image successfully exported to:") + f"\n{filepath}"
+            Message(self.app, _("Export Successful"), msg, "Information").exec()
             self.parent_textEdit.append(msg)
         except Exception as e:
             logger.error(f"Error exporting graph: {e}")
@@ -806,8 +806,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
         try:
             plt.savefig(filepath, dpi=300, bbox_inches='tight')
             plt.close(fig)
-            msg = f"Cluster image successfully exported to:\n{filepath}"
-            Message(self.app, "Export Successful", msg, "information").exec()
+            msg = _("Cluster image successfully exported to:") + f"\n{filepath}"
+            Message(self.app, _("Export Successful"), msg, "Information").exec()
             self.parent_textEdit.append(msg)
         except Exception as e:
             logger.error(f"Error exporting clusters: {e}")
@@ -849,8 +849,8 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
 
         try:
             nx.write_graphml(graph, filepath)
-            msg = f"File successfully exported as GrapgML format for Gephi:\n{filepath}"
-            Message(self.app, "Successful Export", msg, "information").exec()
+            msg = _("File successfully exported as GraphML format for Gephi:") + f"\n{filepath}"
+            Message(self.app, _("Export Successful"), msg, "Information").exec()
             self.parent_textEdit.append(msg)
         except Exception as err:
             logger.error(f"Error exportando a Gephi: {err}")
@@ -1271,7 +1271,7 @@ class DialogReportCooccurrence(QtWidgets.QDialog):
                     union = rel.pop('_union')
                     desc = _("Image areas overlap") + f": {overlap_pct}% " + _("of the smaller area")
                     if is_pdf:
-                        desc += f", {_('page')} {page + 1}"
+                        desc += ", " + _('page') + f" {page + 1}"
                     rel['c0_name'] = c0[name_i]
                     rel['c1_name'] = c1[name_i]
                     rel['fid'] = fid
