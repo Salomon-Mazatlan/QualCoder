@@ -352,6 +352,16 @@ class DialogManageFiles(QtWidgets.QDialog):
         if getattr(self.app, "project_events", None) is not None:
             self.app.project_events.emit_table_changes(tables, source=self)
 
+    def _current_source_row(self):
+        """ Return the current table row when it maps to a loaded file, else None.
+        currentRow() is -1 with no selection (empty project, cleared selection),
+        which would index self.source out of range. """
+
+        row = self.ui.tableWidget.currentRow()
+        if row < 0 or row >= len(self.source):
+            return None
+        return row
+
     def _current_source_id(self):
         """Return the currently focused source id, if any."""
 
@@ -2199,6 +2209,8 @@ class DialogManageFiles(QtWidgets.QDialog):
         x = self.ui.tableWidget.currentRow()
         y = self.ui.tableWidget.currentColumn()
         self.update_label_file_count()
+        if x < 0 or x >= len(self.source):
+            return
         if y == self.MEMO_COLUMN:
             name = self.source[x]['name'].lower()
             cur = self.app.conn.cursor()
@@ -2235,11 +2247,16 @@ class DialogManageFiles(QtWidgets.QDialog):
     def cell_modified(self):
         """ Attribute values can be changed.  """
 
-        x = self.ui.tableWidget.currentRow()
+        x = self._current_source_row()
         y = self.ui.tableWidget.currentColumn()
+        if x is None:
+            return
         # Update attribute value
         if y > self.CASE_COLUMN:
-            value = str(self.ui.tableWidget.item(x, y).text()).strip()
+            item = self.ui.tableWidget.item(x, y)
+            if item is None:
+                return
+            value = str(item.text()).strip()
             attribute_name = self.header_labels[y]
             cur = self.app.conn.cursor()
             # Check numeric for numeric attributes, clear "" if it cannot be cast
@@ -2289,7 +2306,9 @@ class DialogManageFiles(QtWidgets.QDialog):
             if getattr(self.av_dialog_open, 'mediaplayer', None) is not None:
                 self.av_dialog_open.mediaplayer.stop()
             self.av_dialog_open = None
-        x = self.ui.tableWidget.currentRow()
+        x = self._current_source_row()
+        if x is None:
+            return
         self.ui.tableWidget.selectRow(x)
         if self.source[x]['mediapath'] is not None and 'docs:' != self.source[x]['mediapath'][0:5]:
             if len(self.source[x]['mediapath']) > 6 and self.source[x]['mediapath'][:7] in ("/images", "images:"):
