@@ -1903,9 +1903,9 @@ class DialogCodePdf(QtWidgets.QWidget):
         cur.execute("select count(cid) from code_image_visible where id=? and pdf_page is not null",
                     [file_['id']])
         area_codings = cur.fetchone()[0]
-        tt += f"\n{_('Codings:')} {text_codings + area_codings}"
+        tt += "\n" + _('Codings:') + f" {text_codings + area_codings}"
         if file_['memo'] != "":
-            tt += f"\n{_('Memo:')} {file_['memo']}"
+            tt += "\n" + _('Memo:') + f" {file_['memo']}"
         return tt
 
     def get_files(self, ids=None, sort: str = "name asc", preserve_current_file: bool = False):
@@ -3002,7 +3002,7 @@ class DialogCodePdf(QtWidgets.QWidget):
             else:
                 pagina = (ref.get('pdf_page') or 0) + 1
                 titulo = (_("Memo for coded area: ") + ref['name'] +
-                          f" [{_('Page')} {pagina}: {ref['x1']},{ref['y1']} "
+                          " [" + _('Page') + f" {pagina}: {ref['x1']},{ref['y1']} "
                           f"{ref['width']}x{ref['height']}]")
             ui = DialogMemo(self.app, titulo, ref['memo'])
             if ui.exec():
@@ -3570,7 +3570,7 @@ class DialogCodePdf(QtWidgets.QWidget):
         dialog_sentence_end.setWindowTitle(_("Code sentence"))
         dialog_sentence_end.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
         dialog_sentence_end.setInputMode(QtWidgets.QInputDialog.InputMode.TextInput)
-        dialog_sentence_end.setToolTip("Use \\n for line ending")
+        dialog_sentence_end.setToolTip(_("Use \\n for line ending"))
         dialog_sentence_end.setLabelText(
             _("Define sentence ending. Default is period space.\nUse \\n for line ending:"))
         dialog_sentence_end.setTextValue(". ")
@@ -3753,7 +3753,7 @@ class DialogCodePdf(QtWidgets.QWidget):
         if already_assigned > 0:
             msg += f"{already_assigned} " + _("previously coded.") + "\n"
         self.parent_textEdit.append(msg)
-        Message(self.app, "Autocode surround", msg).exec()
+        Message(self.app, _("Autocode surround"), msg).exec()
         self.app.delete_backup = False
         self._after_autocode_refresh()
 
@@ -3865,7 +3865,7 @@ class DialogCodePdf(QtWidgets.QWidget):
         cur.execute(sql_a, [self.file_['id']])
         for r in cur.fetchall():
             pagina = (r[1] or 0) + 1
-            text_ += f"[{_('Page')} {pagina}: {r[2]},{r[3]} {r[4]}x{r[5]}] " + _("Code: ") + f"{r[0]} ({r[7]})\n"
+            text_ += "[" + _('Page') + f" {pagina}: {r[2]},{r[3]} {r[4]}x{r[5]}] " + _("Code: ") + f"{r[0]} ({r[7]})\n"
             text_ += _("Memo: ") + f"{r[6]}\n\n"
         if text_ == "":
             Message(self.app, _("Memos"), _("There are no coding memos for this file."),
@@ -6203,10 +6203,10 @@ class DialogCodePdf(QtWidgets.QWidget):
             except AttributeError:
                 project_name = "Project"
 
-            cursor.insertText(f"{_('Project')}: {project_name}\n", header_fmt)
-            cursor.insertText(f"{_('File')}: {self.file_['name']}\n", header_fmt)
+            cursor.insertText(_('Project') + f": {project_name}\n", header_fmt)
+            cursor.insertText(_('File') + f": {self.file_['name']}\n", header_fmt)
             report_date = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.insertText(f"{_('Generated report')}: {report_date}\n\n", header_fmt)
+            cursor.insertText(_('Generated report') + f": {report_date}\n\n", header_fmt)
 
             seg_co_occurrences = defaultdict(set)
             area_co_occurrences = defaultdict(set)
@@ -6311,18 +6311,18 @@ class DialogCodePdf(QtWidgets.QWidget):
                     c_header_bold.setFontWeight(QtGui.QFont.Weight.Bold)
 
                     cursor.insertText(f"[{p0}-{p1}] ", c_header_bold)
-                    cursor.insertText(f"{_('Code')}: {c['name']}, {_('Coder')}: {c.get('owner', '')}\n\n", c_header_fmt)
+                    cursor.insertText(_('Code') + f": {c['name']}, " + _('Coder') + f": {c.get('owner', '')}\n\n", c_header_fmt)
                     
                     cursor.insertText(seg + "\n\n", it_fmt)
                     
                     co_key = (c['pos0'], c['pos1'], c['cid'])
                     co_codes = seg_co_occurrences.get(co_key, set())
                     if co_codes:
-                        cursor.insertText(f"[{_('Co-occurring codes')}: {', '.join(sorted(co_codes))}]\n\n", norm_fmt)
+                        cursor.insertText("[" + _('Co-occurring codes') + f": {', '.join(sorted(co_codes))}]\n\n", norm_fmt)
 
                     coded_memo = c.get('memo', '')
                     if coded_memo and str(coded_memo).strip():
-                        cursor.insertText(f"[{_('Coded memo')}: {coded_memo}]\n\n", norm_fmt)
+                        cursor.insertText("[" + _('Coded memo') + f": {coded_memo}]\n\n", norm_fmt)
 
             if self.code_areas:
                 cursor.insertText(_("Coded Areas (Pages)") + "\n\n", title_fmt)
@@ -6345,8 +6345,8 @@ class DialogCodePdf(QtWidgets.QWidget):
                     a_header_bold = QtGui.QTextCharFormat(a_header_fmt)
                     a_header_bold.setFontWeight(QtGui.QFont.Weight.Bold)
 
-                    cursor.insertText(f"[{_('Page')} {page}] ", a_header_bold)
-                    cursor.insertText(f"{_('Code')}: {a.get('name', '')}, {_('Coder')}: {a.get('owner', '')}\n\n", a_header_fmt)
+                    cursor.insertText("[" + _('Page') + f" {page}] ", a_header_bold)
+                    cursor.insertText(_('Code') + f": {a.get('name', '')}, " + _('Coder') + f": {a.get('owner', '')}\n\n", a_header_fmt)
                     coords = f"Coordinates: X:{a.get('x1')}, Y:{a.get('y1')}, Width:{a.get('width')}, Height:{a.get('height')}\n\n"
                     cursor.insertText(coords, norm_fmt)
 
@@ -6376,11 +6376,11 @@ class DialogCodePdf(QtWidgets.QWidget):
 
                     co_codes_area = area_co_occurrences.get(a['imid'], set())
                     if co_codes_area:
-                        cursor.insertText(f"[{_('Co-occurring codes')}: {', '.join(sorted(co_codes_area))}]\n\n", norm_fmt)
+                        cursor.insertText("[" + _('Co-occurring codes') + f": {', '.join(sorted(co_codes_area))}]\n\n", norm_fmt)
 
                     coded_memo = a.get('memo', '')
                     if coded_memo and str(coded_memo).strip():
-                        cursor.insertText(f"[{_('Coded memo')}: {coded_memo}]\n\n", norm_fmt)
+                        cursor.insertText("[" + _('Coded memo') + f": {coded_memo}]\n\n", norm_fmt)
 
                 if pdf_doc is not None:
                     pdf_doc.close()
