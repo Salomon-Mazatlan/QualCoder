@@ -1354,7 +1354,7 @@ class CodeTreeController(QtCore.QObject):
         if category['name'] == '':
             cur.execute("update code_cat set supercatid=Null where catid=?", [catid])
             self.app.conn.commit()
-            self.parent_textEdit.append(_("Moved category: ") + current_cat_name + " → Top level")
+            self.parent_textEdit.append(_("Moved category: ") + current_cat_name + " → " + _("Top level"))
         else:
             # Belt and braces: never write a supercatid cycle, even if the selection
             # list was built from a stale tree
@@ -1410,7 +1410,7 @@ class CodeTreeController(QtCore.QObject):
                     merge_date = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
                     source_memo = (source_cat.get('memo', '') or '').strip()
                     source_owner = source_cat.get('owner', self.app.settings['codername'])
-                    merged_block = f"\n\n[{_('Merged from category:')} {source_cat['name']}, {_('Coder:')} {source_owner}, {_('Merger date:')} {merge_date}]"
+                    merged_block = "\n\n[" + _('Merged from category:') + f" {source_cat['name']}, " + _('Coder:') + f" {source_owner}, " + _('Merger date:') + f" {merge_date}]"
                     if source_memo:
                         merged_block += f"\n{source_memo}"
                     target_memo = target_cat.get('memo', '') or ''
@@ -1529,7 +1529,7 @@ class CodeTreeController(QtCore.QObject):
                 merge_date = datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
                 source_memo = item.get('memo', '').strip()
                 source_owner = item.get('owner', self.app.settings['codername'])
-                merged_block = f"\n\n[{_('Merged from code:')} {item['name']}, {_('Coder:')} {source_owner}, {_('Merger date:')} {merge_date}]"
+                merged_block = "\n\n[" + _('Merged from code:') + f" {item['name']}, " + _('Coder:') + f" {source_owner}, " + _('Merger date:') + f" {merge_date}]"
                 if source_memo:
                     merged_block += f"\n{source_memo}"
                 target_memo = target_code.get('memo', '') or ''
