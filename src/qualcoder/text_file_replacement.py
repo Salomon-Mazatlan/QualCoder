@@ -269,9 +269,9 @@ class ReplaceTextFile:
                     rtf = sourcefile.read()
                     text = rtf_to_text(rtf)
                 except Exception as err:
-                    msg = "Importing rtf. Expecting characters encoded as latin-1. Import failed."
+                    msg = _("Importing rtf. Expecting characters encoded as latin-1. Import failed.")
                     logger.debug(f"rtf_to_text error Not Latin-1: {err}")
-                    Message(self.app, "rtf to text error", msg).exec()
+                    Message(self.app, _("rtf to text error"), msg).exec()
         # Import from epub
         if suffix == ".epub":
             book = epub.read_epub(self.new_file_path)
