@@ -2442,7 +2442,7 @@ Click "Yes" to start now.')
         # AI: init llm and update vectorstore after backup to avoid locked sqlite sidecar files.
         self.app.ai.init_llm(self)
         self.ai_chat_window.init_ai_chat(self.app)
-        msg = f"{_('Project Opened: ')}{self.app.project_name}"
+        msg = _('Project Opened: ') + f"{self.app.project_name}"
         self.ui.textEdit.append(msg)
         self.project_summary_report()
         self.show_menu_options()
@@ -2463,8 +2463,8 @@ Click "Yes" to start now.')
         self.ui.textEdit.append("<br />")
         self.ui.textEdit.append("<h1>" + _("Project summary") + "</h1>")
         msg = f"<p>{self.app.project_name}<br />"
-        msg += f'{_("Project path: ")}{self.app.project_path}<br />'
-        msg += f"{_('Project date: ')}{self.project['date']}<br />"
+        msg += _("Project path: ") + f'{self.app.project_path}<br />'
+        msg += _('Project date: ') + f"{self.project['date']}<br />"
         sql = "select memo from project"
         cur.execute(sql)
         memo_res = cur.fetchone()
@@ -2476,35 +2476,38 @@ Click "Yes" to start now.')
         text_res = self.app.get_text_filenames()
         image_res = self.app.get_image_filenames()
         av_res = self.app.get_av_filenames()
-        msg += _("Files: ") + f"{files_res[0]} | Text files: {len(text_res)} | Image files: {len(image_res)} | AV files: {len(av_res)}<br />"
+        msg += _("Files: ") + str(files_res[0]) + " | " + _("Text files: ") + str(len(text_res)) + \
+               " | " + _("Image files: ") + str(len(image_res)) + \
+               " | " + _("AV files: ") + str(len(av_res)) + "<br />"
         sql = "select count(caseid) from cases"
         cur.execute(sql)
         res = cur.fetchone()
-        msg += f"{_('Cases: ')}{res[0]} | "
+        msg += _('Cases: ') + f"{res[0]} | "
         sql = "select count(catid) from code_cat"
         cur.execute(sql)
         res = cur.fetchone()
-        msg += f"{_('Code categories: ')}{res[0]} | "
+        msg += _('Code categories: ') + f"{res[0]} | "
         sql = "select count(cid) from code_name"
         cur.execute(sql)
         res = cur.fetchone()
-        msg += f"{_('Codes: ')}{res[0]}<br />"
+        msg += _('Codes: ') + f"{res[0]}<br />"
         sql = "select count(name) from attribute_type"
         cur.execute(sql)
         res = cur.fetchone()
-        msg += f"{_('Attributes: ')}{res[0]} | "
+        msg += _('Attributes: ') + f"{res[0]} | "
         sql = "select count(jid) from journal"
         cur.execute(sql)
         res = cur.fetchone()
-        msg += f"{_('Journals: ')}{res[0]}<br />"
+        msg += _('Journals: ') + f"{res[0]}<br />"
         cur.execute("select name from source where id=?", [result[4]])
         bookmark_filename = cur.fetchone()
         if bookmark_filename is not None and result[5] is not None:
-            msg += f"Text Bookmark: {bookmark_filename[0]}, position: {result[5]}<br />"
+            msg += _("Text Bookmark: {}, position: {}").format(bookmark_filename[0], result[5]) + "<br />"
         cur.execute("select name from source where id=?", [result[6]])
         avbookmark_filename = cur.fetchone()
         if avbookmark_filename is not None and result[6] is not None:
-            msg += f"A/V Bookmark: {avbookmark_filename[0]}, Milliseconds: {result[7]}, Text position: {result[8]}<br />"
+            msg += _("A/V Bookmark: {}, Milliseconds: {}, Text position: {}").format(
+                avbookmark_filename[0], result[7], result[8]) + "<br />"
         bad_links = self.app.check_bad_file_links()
         if bad_links:
             span = '<span style="color:red">'
@@ -2815,7 +2818,7 @@ def gui():
 
     translator.install()
     if startup_language_error is not None:
-        Message(qual_app, "Translation error", startup_language_error, "warning").exec()
+        Message(qual_app, _("Translation error"), startup_language_error, "warning").exec()
 
     ex = MainWindow(qual_app)
     try:
