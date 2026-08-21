@@ -554,7 +554,7 @@ class DialogAiEditPrompts(QtWidgets.QDialog):
     def _make_folder_item(self, parent_item: QtWidgets.QTreeWidgetItem, folder: EditorFolderRecord) -> QtWidgets.QTreeWidgetItem:
         item = QtWidgets.QTreeWidgetItem(parent_item)
         item.setText(0, folder.name())
-        item.setToolTip(0, "Available in: " + ", ".join(sorted(folder.scopes_present)))
+        item.setToolTip(0, _("Available in: ") + ", ".join(sorted(folder.scopes_present)))
         item.setIcon(0, self._folder_icon())
         item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDropEnabled) & ~Qt.ItemFlag.ItemIsDragEnabled)
         self._set_folder_item_data(item, folder)
