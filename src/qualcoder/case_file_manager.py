@@ -225,7 +225,7 @@ class DialogCaseFileManager(QtWidgets.QDialog):
                           link['owner'], link['date'], link['memo']))
         self.app.conn.commit()
         self._emit_project_table_changes(['case_text'])
-        msg = f'{file_[1]} {_("added to case.")}\n'
+        msg = f'{file_[1]} ' + _("added to case.") + '\n'
 
         # Update table entry assigned to Yes
         rows = self.ui.tableWidget.rowCount()
@@ -262,7 +262,8 @@ class DialogCaseFileManager(QtWidgets.QDialog):
             try:
                 cur.execute(sql, [self.case['caseid'], f[0]])
                 self.app.conn.commit()
-                self.parent_textEdit.append(f"{f[1]} removed from case {self.case['name']}")
+                self.parent_textEdit.append(
+                    _("{} removed from case {}").format(f[1], self.case['name']))
             except Exception as e:
                 print(e)
                 logger.debug(str(e))
