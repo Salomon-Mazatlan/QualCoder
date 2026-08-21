@@ -458,7 +458,7 @@ class DialogSettings(QtWidgets.QDialog):
         msg = _("Download additional language files from here:") + "\n"
         msg += "https://github.com/ccbogel/QualCoder/tree/master/other_languages/\n"
         msg += _("Put either the zip file or the .qm and .mo files into the folder") + " .qualcoder/i18n\n"
-        msg += "For example: sv.zip, or both the sv.mo and sv.qm files." + "\n"
+        msg += _("For example: sv.zip, or both the sv.mo and sv.qm files.") + "\n"
         msg += _("Then select that language in the dropdown box.") + "\n"
         msg += _("Additional languages may not be the most current translations, and they may contain inaccurate translations.")  + "\n"
         msg += _("Read the README.txt file in the i18n folder for more information.")
