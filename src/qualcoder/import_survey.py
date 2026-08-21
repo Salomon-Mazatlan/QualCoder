@@ -223,7 +223,7 @@ class DialogImportSurvey(QtWidgets.QDialog):
                     self.data.append(row)
             except csv.Error as err:
                 logger.error(('file %s, line %d: %s' % (self.filepath, reader.line_num, err)))
-                self.parent_textEdit.append(f"Row error: {reader.line_num}  {err}")
+                self.parent_textEdit.append(_("Row error: ") + f"{reader.line_num}  {err}")
                 return False
         # Get field names and replace blacks with a placeholder
         self.fields = []
@@ -312,8 +312,8 @@ class DialogImportSurvey(QtWidgets.QDialog):
             fail_msg = _("There are duplicated identifiers in the first column.\nFile not imported")
             self.parent_textEdit.append(f"{self.filepath} {fail_msg}")
             return False
-        msg = f"{_('Survey file:')} {self.filepath}\n"
-        msg += f"{_('Fields:')} {len(self.fields)}. {_('Rows:')} {len(self.data)}"
+        msg = _('Survey file:') + f" {self.filepath}\n"
+        msg += _('Fields:') + f" {len(self.fields)}. " + _('Rows:') + f" {len(self.data)}"
         logger.info(msg)
         self.parent_textEdit.append(msg)
         return True
@@ -327,7 +327,7 @@ class DialogImportSurvey(QtWidgets.QDialog):
             return
         # Check for duplicate field names
         if len(self.fields) != len(set(self.fields)):
-            msg = "There are duplicate attribute names."
+            msg = _("There are duplicate attribute names.")
             Message(self.app, _("Attribute name error"), msg, "warning").exec()
             logger.info(_("Survey Not Imported. Attribute duplicate name error: ") + msg)
             self.parent_textEdit.append(msg)
@@ -570,8 +570,8 @@ class DialogImportSurvey(QtWidgets.QDialog):
         self.ui.tableWidget.setColumnCount(len(self.fields))
         for c, field in enumerate(self.fields):
             item = QtWidgets.QTableWidgetItem(f"{field}\n{self.fields_type[c]}\n")
-            msg = "Right click to change column name or to change from character to qualitative"
-            item.setToolTip(_(msg))
+            msg = _("Right click to change column name or to change from character to qualitative")
+            item.setToolTip(msg)
             self.ui.tableWidget.setHorizontalHeaderItem(c, item)
         self.ui.tableWidget.setRowCount(len(self.data))
         for row in range(0, len(self.data)):
