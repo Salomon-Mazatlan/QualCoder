@@ -3937,7 +3937,7 @@ class AiLLM():
             return True
         if ask:
             msg = _('Do you really want to cancel the AI operation?')
-            msg_box = Message(self.app, 'AI Cancel', msg)
+            msg_box = Message(self.app, _('AI Cancel'), msg)
             msg_box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No)
             reply = msg_box.exec()
             if reply == QtWidgets.QMessageBox.StandardButton.No:
@@ -3945,7 +3945,7 @@ class AiLLM():
         success = self.cancel_all_runs(wait_ms=5000)
         if ask and not success:
             msg = _('The AI operation could not be aborted immediately. It may take a moment for the AI to be ready again.')
-            msg_box = Message(self.app, 'AI Cancel', msg)
+            msg_box = Message(self.app, _('AI Cancel'), msg)
             msg_box.exec()
         return success
 
