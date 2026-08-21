@@ -166,7 +166,7 @@ class DialogCodeText(QtWidgets.QWidget):
         self.ui.groupBox_edit_mode.hide()
         lbl_font = f'font: {self.app.settings["fontsize"] - 2}pt "{self.app.settings["font"]}";'
         self.ui.label_editing.setStyleSheet(lbl_font)
-        ee = f'{_("EDITING TEXT MODE (Ctrl+E)")} '
+        ee = _("EDITING TEXT MODE (Ctrl+E)") + ' '
         ee += _(
             "Avoid selecting sections of text with a combination of not underlined (not coded / annotated / "
             "case-assigned) and underlined (coded, annotated, case-assigned).")
@@ -1352,17 +1352,17 @@ class DialogCodeText(QtWidgets.QWidget):
 
             cur.execute(sql_codings, [file_['id']])
             res_codings = cur.fetchone()
-            tt += f'\n{_("Codings:")} {res_codings[0]}'
-            tt += f"\n{_('From:')} {file_['start']} - {file_['end']}"
+            tt += '\n' + _("Codings:") + f' {res_codings[0]}'
+            tt += "\n" + _('From:') + f" {file_['start']} - {file_['end']}"
             if file_['memo'] != "":
-                tt += f"\n{_('Memo')}: {file_['memo']}"
+                tt += "\n" + _('Memo') + f": {file_['memo']}"
 
             if file_['risid']:
                 ris = Ris(self.app)
                 ris.get_references(file_['risid'])
                 if ris.refs:
                     reference = ris.refs[0]['vancouver']
-                    tt += f"\n{_('REF')}: {reference}"
+                    tt += "\n" + _('REF') + f": {reference}"
 
             file_['tooltip'] = tt
 
@@ -1419,10 +1419,10 @@ class DialogCodeText(QtWidgets.QWidget):
         sql_codings = "select count(cid) from code_text_visible where fid=?"
         cur.execute(sql_codings, [self.file_['id']])
         res = cur.fetchone()
-        tt += f"\n{_('Codings:')} {res[0]}"
-        tt += f"\n{_('From:')} {file_size['start']} - {file_size['end']}"
+        tt += "\n" + _('Codings:') + f" {res[0]}"
+        tt += "\n" + _('From:') + f" {file_size['start']} - {file_size['end']}"
         if self.file_['memo'] != "":
-            tt += f"\n{_('Memo')}: {self.file_['memo']}"
+            tt += "\n" + _('Memo') + f": {self.file_['memo']}"
         # Find item to update tooltip
         items = self.ui.listWidget.findItems(self.file_['name'], Qt.MatchFlag.MatchExactly)
         if len(items) == 0:
@@ -2411,7 +2411,7 @@ class DialogCodeText(QtWidgets.QWidget):
             memo_pos = tt.find(_("Memo:"))
             if memo_pos == -1:  # no memo section yet; append instead of slicing
                 memo_pos = len(tt)
-            new_tt = f"{tt[:memo_pos]} {_('Memo:')} {file_['memo']}"
+            new_tt = f"{tt[:memo_pos]} " + _('Memo:') + f" {file_['memo']}"
             items[0].setToolTip(new_tt)
         self.app.delete_backup = False
         self._emit_project_table_changes(['source'])
@@ -3128,7 +3128,7 @@ class DialogCodeText(QtWidgets.QWidget):
         """ Return project name and APA software citation string for export. """  
 
         project_name = Path(self.app.project_path).stem  # attr is project_path
-        header = f"{_('Project')}: {project_name}"
+        header = _('Project') + f": {project_name}"
         apa_cite = ("Curtain, C. Dröge, K. Missaghieh--Poncet, J. Salomón, L. (2026) QualCoder 4.0 "
                     "[Computer software]. Retrieved from https://github.com/ccbogel/QualCoder/releases/tag/4.0")
         return header, apa_cite
@@ -3459,12 +3459,12 @@ class DialogCodeText(QtWidgets.QWidget):
 
             cursor.insertText(f"[{c['pos0']}-{c['pos1']}] ", c_header_bold)
             if cat_name:
-                cursor.insertText(f"{_('Category')}: {cat_name}, ", c_header_fmt)
-            cursor.insertText(f"{_('Code')}: {c['name']}", c_header_fmt)
+                cursor.insertText(_('Category') + f": {cat_name}, ", c_header_fmt)
+            cursor.insertText(_('Code') + f": {c['name']}", c_header_fmt)
             if c.get('important') == 1:
                 cursor.insertText(" ★", c_header_bold)
             coding_datetime = c.get('date', '')[:16] if c.get('date') else ''  
-            cursor.insertText(f",  {_('Coder')}: {c['owner']} ({coding_datetime})", c_header_fmt)
+            cursor.insertText(",  " + _('Coder') + f": {c['owner']} ({coding_datetime})", c_header_fmt)
             cursor.insertText("\n", norm_fmt)
             cursor.insertText("\n", norm_fmt)
             cursor.insertText(seg, it_fmt)
@@ -3472,14 +3472,14 @@ class DialogCodeText(QtWidgets.QWidget):
 
             coded_memo = c.get('memo', '')
             if coded_memo and str(coded_memo).strip():
-                cursor.insertText(f"[{_('Coded memo')}: {coded_memo}]\n", norm_fmt)
+                cursor.insertText("[" + _('Coded memo') + f": {coded_memo}]\n", norm_fmt)
             else:  
-                cursor.insertText(f"[{_('Coded memo')}: {_('No coded memo')}]\n", norm_fmt)
+                cursor.insertText("[" + _('Coded memo') + ": " + _('No coded memo') + "]\n", norm_fmt)
 
             co_key = (c['pos0'], c['pos1'], c['cid'])
             co_codes = seg_co_occurrences.get(co_key, set())
             if co_codes:
-                cursor.insertText(f"[{_('Co-occurring codes')}: {', '.join(sorted(co_codes))}]\n", norm_fmt)
+                cursor.insertText("[" + _('Co-occurring codes') + f": {', '.join(sorted(co_codes))}]\n", norm_fmt)
             cursor.insertText("\n", norm_fmt)
 
         # 5. HIGHLIGHTED FULL FILE <- L #20260325
@@ -3572,6 +3572,9 @@ class DialogCodeText(QtWidgets.QWidget):
         escaped_name = html.escape(self.file_['name'])
         escaped_header = html.escape(project_header)
         escaped_apa = html.escape(apa_cite)
+        # Pre-resolve labels: xgettext does not extract _() nested in f-strings
+        label_file = _("File:")
+        label_citation = _("Software citation")
         final_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3596,13 +3599,13 @@ class DialogCodeText(QtWidgets.QWidget):
 <body>
     <div class="header">
         <h1>{escaped_header}</h1>
-        <h2>{_("File:")} {escaped_name}</h2>
+        <h2>{label_file} {escaped_name}</h2>
     </div>
     <div class="content">
         {html_body}
     </div>
     <div class="footer">
-        <b>{_("Software citation")}</b><br>
+        <b>{label_citation}</b><br>
         {escaped_apa}
     </div>
 </body>
@@ -3655,7 +3658,7 @@ class DialogCodeText(QtWidgets.QWidget):
  
         # Add project header
         project_header, apa_cite = self._export_project_header()  # footer
-        tagged_text = (f"{project_header}\n{_('File:')} {self.file_['name']}\n\n"
+        tagged_text = (f"{project_header}\n" + _('File:') + f" {self.file_['name']}\n\n"
                        f"{tagged_text}\n")
  
         # Add Codes list
@@ -3671,13 +3674,13 @@ class DialogCodeText(QtWidgets.QWidget):
         for cd in codes_list:
             tagged_text += cd[0]
             if cd[2] is not None:
-                tagged_text += f" -- {_('CATEGORY')}: {cd[2]}"
+                tagged_text += " -- " + _('CATEGORY') + f": {cd[2]}"
             if cd[1] != "":
-                tagged_text += f" -- {_('CODE MEMO')}: {cd[1]}"
+                tagged_text += " -- " + _('CODE MEMO') + f": {cd[1]}"
             tagged_text += '\n'
  
         # Citation at end
-        tagged_text += f"\n\n{_('Software citation')}\n{apa_cite}\n"
+        tagged_text += "\n\n" + _('Software citation') + f"\n{apa_cite}\n"
  
         export_filename = self.file_['name'] + "_tagged.txt"
         exp_dir = ExportDirectoryPathDialog(self.app, export_filename)
@@ -5242,7 +5245,7 @@ class DialogCodeText(QtWidgets.QWidget):
         if already_assigned > 0:
             msg += f"{already_assigned} " + _("previously coded.") + "\n"
         self.parent_textEdit.append(msg)
-        Message(self.app, "Autocode surround", msg).exec()
+        Message(self.app, _("Autocode surround"), msg).exec()
         self.app.delete_backup = False
         if len(undo_list) > 0:
             self._emit_project_table_changes(['code_text'])
@@ -5315,7 +5318,7 @@ class DialogCodeText(QtWidgets.QWidget):
         dialog_sentence_end.setWindowTitle(_("Code sentence"))
         dialog_sentence_end.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
         dialog_sentence_end.setInputMode(QtWidgets.QInputDialog.InputMode.TextInput)
-        dialog_sentence_end.setToolTip("Use \\n for line ending")
+        dialog_sentence_end.setToolTip(_("Use \\n for line ending"))
         dialog_sentence_end.setLabelText(
             _("Define sentence ending. Default is period space.\nUse \\n for line ending:"))
         dialog_sentence_end.setTextValue(". ")
