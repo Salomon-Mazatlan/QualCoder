@@ -203,7 +203,7 @@ class DialogReportRelations(QtWidgets.QDialog):
                 if i < 20:
                     msg += f"\n{file_['name']}"
         if len(ui.result_file_ids) > 20:
-            msg += f"\nand more. Total files: {len(ui.result_file_ids)}"
+            msg += "\n" + _("and more. Total files: ") + str(len(ui.result_file_ids))
         Message(self.app, _("Files selected by attributes"), msg).exec()
 
         self.ui.pushButton_file_attributes.setIcon(qta.icon('mdi6.variable-box', options=[{'scale_factor': 1.3}]))
