@@ -201,7 +201,7 @@ class DialogReportComparisonTable(QtWidgets.QDialog):
         split_value = None
         if attribute['valuetype'] == 'numeric':
             title = f"{attribute['name']}[{attribute['caseOrFile']}]"
-            msg = f"Enter split number (Min: {attribute['min']} - Max: {attribute['max']}):"
+            msg = _("Enter split number (Min: {} - Max: {}):").format(attribute['min'], attribute['max'])
             split_value, ok = QtWidgets.QInputDialog.getDouble(self, title, msg)
             if not ok or not split_value:
                 self.clear_table_and_data()
@@ -426,7 +426,7 @@ class DialogReportComparisonTable(QtWidgets.QDialog):
             res = cur.fetchall()
             for r in res:
                 self.files.append({'id': r[0], 'name': f"{case['name']}\n{r[1]}", 'memo': r[2]})
-        msg = f"Selection\nCases: {len(cases)}. Files: {len(self.files)}"
+        msg = _("Selection\nCases: {}. Files: {}").format(len(cases), len(self.files))
         Message(self.app, _("Selection"), msg).exec()
         if not self.files:
             self.clear_table_and_data()
