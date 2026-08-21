@@ -90,9 +90,9 @@ class DialogManageLinks(QtWidgets.QDialog):
         msg += _("NOTE: The original text must occur only once in the path that is being updated.\n")
         msg += _("NOTE: For Windows use forward slashes to represent backslashes for folder paths")
         Message(self.app, _("Replace the folder path"), msg).exec()
-        old_text, ok = QtWidgets.QInputDialog.getText(None, "original text", _("Old value:"))
+        old_text, ok = QtWidgets.QInputDialog.getText(None, _("original text"), _("Old value:"))
         old_text = old_text.replace("\\", "/")
-        new_text, ok = QtWidgets.QInputDialog.getText(None, "Replacement text", _("Replace with:"))
+        new_text, ok = QtWidgets.QInputDialog.getText(None, _("Replacement text"), _("Replace with:"))
         if not ok or new_text == "":
             Message(self.app, _("Bulk edit"), _("Aborted")).exec()
             return
