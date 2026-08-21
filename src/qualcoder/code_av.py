@@ -5393,7 +5393,7 @@ class SegmentGraphicsItem(QtWidgets.QGraphicsLineItem):
             Message(self.app, _("Segment exported"), filepath).exec()
         except Exception as e_:
             logger.error(str(e_))
-            Message(self.app, "ffmpeg error", str(e_)).exec()
+            Message(self.app, _("ffmpeg error"), str(e_)).exec()
 
     def set_coded_importance(self, important=True):
         """ Set or unset importance to self.segment.
