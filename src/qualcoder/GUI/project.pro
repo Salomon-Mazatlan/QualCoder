@@ -15,6 +15,7 @@ ui_dialog_code_colours.py \
 ui_dialog_code_context_image.py \
 ui_dialog_code_image.py \
 ui_dialog_code_pdf.py \
+ui_dialog_code_picker.py \
 ui_dialog_code_relations.py \
 ui_dialog_code_text.py \
 ui_dialog_coder_names.py \
