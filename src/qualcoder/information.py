@@ -360,6 +360,7 @@ A {_("Annotate - Current text selection")}<br />\
 B {_("Create bookmark - at clicked position")}<br />\
 Shift B {_("Go to bookmark")}<br />\
 C {_("Create new category. If a category is already selected, the new category will be underneath")}<br />\
+F {_("Find and apply code - searchable code picker for the current text selection")}<br />\
 H {_("Hide / Unhide top groupbox")}<br />\
 I {_("Tag coded text at clicked position as important")}<br />\
 L {_("Show codes like (when text coding area is in focus)")}<br />\

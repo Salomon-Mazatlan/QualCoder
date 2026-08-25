@@ -50,6 +50,7 @@ from .ai_prompt_library import DialogAiEditPrompts
 from .ai_search_dialog import DialogAiSearch
 from .ai_chat import ai_chat_signal_emitter
 from .code_in_all_files import DialogCodeInAllFiles
+from .code_picker import DialogCodePicker
 from .code_text_coding_margin import (CodingMargin, DEFAULT_CODING_MARGIN_WIDTH, MINIMUM_CODING_MARGIN_WIDTH,
                                       MINIMUM_CODING_MARGIN_LABEL_WIDTH)
 from .code_tree import CodeTreeController
@@ -1272,6 +1273,41 @@ class DialogCodeText(QtWidgets.QWidget):
         while parent is not None:
             parent.setExpanded(True)
             parent = parent.parent()
+
+    def select_tree_item_by_cid(self, cid: int) -> bool:
+        """ Select the tree item of this code id and expand its parents.
+        Args:
+            cid: Integer code id
+        Returns:
+            True when the code item was found
+        """
+
+        iterator = QtWidgets.QTreeWidgetItemIterator(self.ui.treeWidget)
+        while iterator.value():
+            item = iterator.value()
+            if item.text(1) == f"cid:{cid}":
+                self.ui.treeWidget.setCurrentItem(item)
+                parent = item.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                return True
+            iterator += 1
+        return False
+
+    def find_and_apply_code(self):
+        """ Open the searchable code picker and apply the chosen code to the selected text.
+        Called by: keyPressEvent F key, with text selected. """
+
+        ui = DialogCodePicker(self.app, self.parent_textEdit, self)
+        ok = ui.exec()
+        if ui.codes_edited:  # A rename inside the picker changed the database
+            self.update_dialog_codes_and_categories(["code_name", "code_cat"])
+        if not ok or ui.selected_code is None:
+            return
+        if not self.select_tree_item_by_cid(ui.selected_code['cid']):
+            return
+        self.mark()
 
     def get_recent_codes(self):
         """ Get recently used codes. Must have loaded all codes first.
@@ -2768,6 +2804,7 @@ class DialogCodeText(QtWidgets.QWidget):
         Shift B - go to bookmark
         C New category
         Ctrl F jump to search box
+        F Find and apply code - for current selection
         H Hide / Unhide top groupbox
         I Tag important
         L Show codes like
@@ -2895,6 +2932,10 @@ class DialogCodeText(QtWidgets.QWidget):
             cur = self.app.conn.cursor()
             cur.execute("update project set bookmarkfile=?, bookmarkpos=?", [self.file_['id'], text_pos])
             self.app.conn.commit()
+            return
+        # Find and apply a code to the current text selection
+        if key == QtCore.Qt.Key.Key_F and selected_text != "":
+            self.find_and_apply_code()
             return
         # New category
         if key == QtCore.Qt.Key.Key_C:
