@@ -979,6 +979,97 @@ def c7_hidden_progress_stays_hidden():
 
 
 
+
+def _settle(msecs=800):
+    """Run the event loop, so any pending timer has its chance to misbehave."""
+
+    from PyQt6 import QtCore
+    loop = QtCore.QEventLoop()
+    QtCore.QTimer.singleShot(msecs, loop.quit)
+    loop.exec()
+
+
+def _visible_dialogs():
+    return [type(w).__name__ for w in APP.topLevelWidgets()
+            if w.isVisible() and isinstance(w, (QtWidgets.QDialog, QtWidgets.QProgressDialog))]
+
+
+def _drive_dialog(action, timeout_ms=6000, delay_ms=800):
+    """Wait for the preview dialog to appear, run checks on the live screen, then act.
+
+    delay_ms gives Qt's pending auto-show timer time to fire, which is how a stray modal
+    dialog would surface on top of the preview.
+    """
+
+    from PyQt6 import QtCore
+    state = {'elapsed': 0, 'stray': None, 'found': False}
+    timer = QtCore.QTimer()
+    timer.setInterval(100)
+
+    def poll():
+        state['elapsed'] += timer.interval()
+        preview = None
+        for widget in APP.topLevelWidgets():
+            if isinstance(widget, merge_projects.DialogMergePreview) and widget.isVisible():
+                preview = widget
+        if preview is not None and state['elapsed'] >= delay_ms:
+            state['found'] = True
+            # Anything else modal and visible is covering the preview
+            state['stray'] = [type(w).__name__ for w in APP.topLevelWidgets()
+                              if w.isVisible() and w is not preview and w.isModal()]
+            timer.stop()
+            action(preview)
+        elif state['elapsed'] > timeout_ms:
+            # Safety net: never leave the suite blocked in exec()
+            timer.stop()
+            for widget in APP.topLevelWidgets():
+                if widget.isVisible():
+                    widget.reject() if hasattr(widget, 'reject') else widget.close()
+
+    timer.timeout.connect(poll)
+    timer.start()
+    state['timer'] = timer  # Keep a reference, a local QTimer is garbage collected
+    return state
+
+
+# F1. End to end with the real preview and the real progress dialog, accepting the merge
+def f1_end_to_end_accept():
+    base = fresh("f1")
+    make(base / "src.qda", RICH_SOURCE, media=RICH_MEDIA)
+    make(base / "dst.qda", [])
+    app = StubApp(base / "dst.qda")
+    state = _drive_dialog(lambda dialog: dialog.accept())
+    mp = merge_projects.MergeProjects(app, str(base / "src.qda"))
+    check("F1 the preview dialog actually opened", state['found'], f"waited {state['elapsed']} ms")
+    check("F1 nothing modal covering the preview", state['stray'] == [], str(state['stray']))
+    check("F1 merge completed", mp.projects_merged is True)
+    cur = app.conn.cursor()
+    cur.execute("select count(*) from code_image where pdf_page is not null")
+    check("F1 PDF areas merged", cur.fetchone()[0] == 2)
+    _settle()
+    check("F1 no dialog left on screen", not _visible_dialogs(), str(_visible_dialogs()))
+    check("F1 no modal widget left blocking", APP.activeModalWidget() is None)
+
+
+# F2. Same, cancelling from the real dialog
+def f2_end_to_end_cancel():
+    base = fresh("f2")
+    make(base / "src.qda", RICH_SOURCE, media=RICH_MEDIA)
+    make(base / "dst.qda", [])
+    app = StubApp(base / "dst.qda")
+    before = counts(app.conn)
+    state = _drive_dialog(lambda dialog: dialog.reject())
+    mp = merge_projects.MergeProjects(app, str(base / "src.qda"))
+    check("F2 the preview dialog actually opened", state['found'], f"waited {state['elapsed']} ms")
+    check("F2 nothing modal covering the preview", state['stray'] == [], str(state['stray']))
+    check("F2 cancel wrote nothing", counts(app.conn) == before)
+    check("F2 flagged as cancelled", mp.merge_cancelled is True)
+    _settle()
+    check("F2 no dialog left on screen", not _visible_dialogs(), str(_visible_dialogs()))
+    check("F2 no modal widget left blocking", APP.activeModalWidget() is None)
+
+
+
 MERGE_HOLDER = [None]
 
 
@@ -1012,6 +1103,8 @@ if __name__ == "__main__":
     d2_cancel_inside_large_file()
     e1_journal_report()
     e2_preview_dialog_builds()
+    f1_end_to_end_accept()
+    f2_end_to_end_cancel()
     failed = [r for r in RESULTS if not r[1]]
     shutil.rmtree(TMP, ignore_errors=True)
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed")
