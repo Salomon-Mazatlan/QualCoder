@@ -272,6 +272,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.files_renamed = []  # list of dictionaries of old and new names and fid
         self.clipboard_text = ""  # Used to copy text into another cell
         self.pdf_import_code_highlights = None  # Per-batch tri-state: code PDF highlight annotations as codings
+        self._av_duration_cache = {}  # (path, size, mtime): msecs, avoids reparsing media on every reload
         QtWidgets.QDialog.__init__(self)
         self.ui = Ui_Dialog_manage_files()
         self.ui.setupUi(self)
@@ -2082,23 +2083,20 @@ class DialogManageFiles(QtWidgets.QDialog):
                 return icon, metadata, "Not found Error"
             if vlc:
                 try:
-                    try:
-                        from .media_player_qt import metadata_vlc_instance
-                        instance = metadata_vlc_instance(vlc)  # cached: metadata only
-                    except NameError as name_err:
-                        # NameError: no function 'libvlc_new'
-                        logger.error(f"vlc.Instance: {name_err}")
-                        return icon, metadata, f"Cannot use vlc. {name_err}"
-                    media = instance.media_new(abs_path)
-                    media.parse()
-                    msecs = media.get_duration()
-                    duration_txt = msecs_to_hours_mins_secs(msecs)
-                    metadata += " " + _("Duration: ") + duration_txt
-                    return icon, metadata, ""
+                    msecs = self._media_duration_msecs(abs_path)
+                except NameError as name_err:
+                    # NameError: no function 'libvlc_new'
+                    logger.error(f"vlc.Instance: {name_err}")
+                    return icon, metadata, f"Cannot use vlc. {name_err}"
                 except AttributeError as err:
                     logger.warning(str(err))
                     metadata += _("Cannot locate media. ") + f"{abs_path}\n{err}"
                     return icon, metadata, "Not found error"
+                if msecs is None:
+                    metadata += _("Cannot get media duration.")
+                    return icon, metadata, "Other error"
+                metadata += " " + _("Duration: ") + msecs_to_hours_mins_secs(msecs)
+                return icon, metadata, ""
             else:
                 metadata += _("Cannot get media duration.\nVLC not installed.")
                 return icon, metadata, "Other error"
@@ -2117,6 +2115,49 @@ class DialogManageFiles(QtWidgets.QDialog):
         if txt != "":
             metadata += f'\n{_("Case linked:")}\n{txt}'
         return icon, metadata, ""
+
+    def _media_duration_msecs(self, abs_path):
+        """ Media duration in msecs, or None when it cannot be read.
+
+        Cached per file (path, size, mtime) because the table is reloaded on every
+        delete, import, rename and attribute edit, and each miss costs a blocking
+        libvlc parse. The media object is always released: leaking one per row per
+        reload eventually destabilises libvlc.
+        """
+
+        try:
+            stat = Path(abs_path).stat()
+            key = (str(abs_path), stat.st_size, int(stat.st_mtime))
+        except OSError:
+            return None
+        if key in self._av_duration_cache:
+            return self._av_duration_cache[key]
+        from .media_player_qt import metadata_vlc_instance
+        instance = metadata_vlc_instance(vlc)
+        if instance is None:
+            return None
+        media = instance.media_new(abs_path)
+        try:
+            parsed = False
+            try:
+                # Bounded local parse; plain parse() blocks with no timeout
+                media.parse_with_options(vlc.MediaParseFlag.local, 3000)
+                deadline = time.time() + 3.0
+                while time.time() < deadline:
+                    if media.get_parsed_status() != vlc.MediaParsedStatus.init:
+                        parsed = True
+                        break
+                    time.sleep(0.01)
+            except AttributeError:
+                media.parse()  # older python-vlc without parse_with_options
+                parsed = True
+            msecs = media.get_duration() if parsed else -1
+        finally:
+            media.release()
+        if msecs is None or msecs < 0:
+            return None
+        self._av_duration_cache[key] = msecs
+        return msecs
 
     def get_cases_by_filename(self, name: str):
         """ Called by get_icon_and_metadata, get_file_data
@@ -2621,7 +2662,6 @@ class DialogManageFiles(QtWidgets.QDialog):
         id_ = cur.fetchone()[0]
         item['id'] = id_
         ui = DialogEditTextFile(self.app, id_)
-        ui.ui.textEdit.setAcceptRichText(False)
         ui.exec()
         icon, metadata, err_ = self.get_icon_and_metadata(id_)
         item['icon'] = icon
@@ -3591,26 +3631,22 @@ class DialogManageFiles(QtWidgets.QDialog):
                 except (AttributeError, RuntimeError):
                     pass
 
-    def vectorstore_delete_document_safe(self, fid:int):
-        """
-        Removes the document from the AI index without letting a vectorstore lock
-        abort the project file deletion (e.g. "database is locked" when an embeddings
-        worker is writing to search.sqlite in the background). The index is derived
-        data: the next update_vectorstore prunes ids no longer in source, so failing
-        soft here is safe and self-repairing.
+    def vectorstore_delete_documents_safe(self, fids):
+        """ Removes several documents from the AI index in one pass, at the end of a
+        batch delete, so the index is rebuilt once instead of once per file.
 
         Args:
-            fid: source id, Integer
+            fids: list of source ids
         """
 
-        if self.app.settings['ai_enable'] != 'True':
+        if self.app.settings['ai_enable'] != 'True' or not fids:
             return
         try:
-            self.app.ai.sources_vectorstore.delete_document(fid)
+            self.app.ai.sources_vectorstore.delete_documents(fids)
         except Exception as err:
-            logger.warning(f"vectorstore delete_document fid {fid}: {err}")
+            logger.warning(f"vectorstore delete_documents {len(fids)} ids: {err}")
             self.parent_text_edit.append(
-                _("AI index is busy; the deleted file will be removed from the index "
+                _("AI index is busy; the deleted files will be removed from the index "
                   "on the next update."))
 
     def _unlink_media_with_retry(self, filepath):
@@ -3627,7 +3663,8 @@ class DialogManageFiles(QtWidgets.QDialog):
             except PermissionError as err:
                 last_err = err
                 self._release_media_players_for(filepath)
-                QtWidgets.QApplication.processEvents()
+                # No processEvents here: re-entering the event loop mid-delete let the
+                # table repaint and act on a self.source that is being rebuilt
                 time.sleep(0.15)
         logger.warning(f"Locked media file, could not delete: {filepath} {last_err}")
         Message(self.app, _("Cannot delete file"),
@@ -3699,6 +3736,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         # Release PDFs open in coding tabs before deleting on disk.
         self.release_files_in_coding_dialogs()
         msg = ""
+        deleted_ids = []  # purged from the AI index once, after the loop
         cur = self.app.conn.cursor()
         for s in selection:
             msg += _("Deleted file: ") + s['name'] + "\n"
@@ -3736,14 +3774,15 @@ class DialogManageFiles(QtWidgets.QDialog):
                 # import could inherit this id, becoming a ghost transcript
                 cur.execute("update source set av_text_id=null where av_text_id=?", [s['id']])
                 self.app.conn.commit()
-                # Delete from vectorstore
-                self.vectorstore_delete_document_safe(s['id'])
+                deleted_ids.append(s['id'])
 
                     # Delete image, audio or video source
             if s['mediapath'] is not None and s['mediapath'][0:5] != 'docs:' and s['mediapath'][0:6] != '/docs/':
                 # Get linked transcript file id
                 cur.execute("select av_text_id from source where id=?", [s['id']])
                 res = cur.fetchone()
+                if res is None:
+                    continue  # already removed earlier in this batch, e.g. as a linked transcript
                 av_text_id = res[0]
                 # Remove avid links in code_text
                 sql = "select avid from code_av where id=?"
@@ -3778,9 +3817,9 @@ class DialogManageFiles(QtWidgets.QDialog):
                     cur.execute("delete from case_text where fid = ?", [res[0]])
                     cur.execute("delete from attribute where attr_type ='file' and id=?", [res[0]])
                     self.app.conn.commit()
-                    # Delete from vectorstore; the safe helper survives index locks
-                    self.vectorstore_delete_document_safe(res[0])
+                    deleted_ids.append(res[0])
 
+        self.vectorstore_delete_documents_safe(deleted_ids)
         self.update_files_in_dialogs()
         self.check_attribute_placeholders()
         self.parent_text_edit.append(msg)
@@ -3835,6 +3874,7 @@ class DialogManageFiles(QtWidgets.QDialog):
 
         # Release PDFs open in coding tabs before deleting on disk.
         self.release_files_in_coding_dialogs()
+        deleted_ids = []  # purged from the AI index once, after the loop
         cur = self.app.conn.cursor()
         for row in rows:
             file_id = self.source[row]['id']
@@ -3870,13 +3910,14 @@ class DialogManageFiles(QtWidgets.QDialog):
                 cur.execute("delete from attribute where attr_type ='file' and id=?", [file_id])
                 cur.execute("update source set av_text_id=null where av_text_id=?", [file_id])
                 self.app.conn.commit()
-                # Delete from vectorstore
-                self.vectorstore_delete_document_safe(file_id)
+                deleted_ids.append(file_id)
 
             else:  # Delete image, audio or video source
                 # Get linked transcript file id
                 cur.execute("select av_text_id from source where id=?", [file_id])
                 res = cur.fetchone()
+                if res is None:
+                    continue  # already removed earlier in this batch, e.g. as a linked transcript
                 av_text_id = res[0]
                 # Remove avid links in code_text
                 sql = "select avid from code_av where id=?"
@@ -3899,8 +3940,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 cur.execute("delete from code_av where id = ?", [file_id])
                 cur.execute("delete from attribute where attr_type='file' and id=?", [file_id])
                 self.app.conn.commit()
-                # Not expected for non-text files; the safe helper survives index locks
-                self.vectorstore_delete_document_safe(file_id)
+                deleted_ids.append(file_id)
 
                 # Delete transcription text file
                 if av_text_id is not None:
@@ -3910,10 +3950,10 @@ class DialogManageFiles(QtWidgets.QDialog):
                     cur.execute("delete from case_text where fid = ?", [res[0]])
                     cur.execute("delete from attribute where attr_type ='file' and id=?", [res[0]])
                     self.app.conn.commit()
-                    # Delete from vectorstore; the safe helper survives index locks
-                    self.vectorstore_delete_document_safe(res[0])
+                    deleted_ids.append(res[0])
 
             self.files_renamed = [x for x in self.files_renamed if not (file_id == x.get('fid'))]
+        self.vectorstore_delete_documents_safe(deleted_ids)
         self.update_files_in_dialogs()
         self.check_attribute_placeholders()
         self.parent_text_edit.append(_("Deleted: ") + filenames)
