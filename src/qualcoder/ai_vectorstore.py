@@ -1136,13 +1136,26 @@ class AiVectorstore:
             conn.close()
 
     def delete_document(self, id_):
+        self.delete_documents([id_])
+
+    def delete_documents(self, ids):
+        """ Drop one or more sources from the index, rebuilding it once.
+
+        Rebuilding per source loaded every vector of the project again for each
+        deleted file, which froze the interface on large projects.
+        """
+
+        ids = [int(i) for i in ids]
+        if not ids:
+            return
         self._ensure_embedding_function()
         self._set_project_paths()
         conn = self._connect_search_db()
         try:
             self._ensure_search_schema(conn)
             self._set_meta_build_state(conn, "building")
-            self._delete_source_rows(conn, int(id_))
+            for id_ in ids:
+                self._delete_source_rows(conn, id_)
             self._rebuild_faiss_index_from_db(conn)
             self._set_meta_build_state(conn, "ready")
         finally:
