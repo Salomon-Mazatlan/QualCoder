@@ -14,7 +14,73 @@
    <string>QualCoder</string>
   </property>
   <widget class="QWidget" name="centralwidget">
+   <property name="styleSheet">
+    <string notr="true">
+/* Scoped to #centralwidget so a theme stylesheet cannot outrank these rules. */
+
+#centralwidget QToolButton {
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 1px;
+    background: transparent;
+}
+#centralwidget QToolButton:hover { background: rgba(127, 127, 127, 0.20); }
+#centralwidget QToolButton:pressed { background: rgba(127, 127, 127, 0.34); }
+#centralwidget QToolButton:checked { background: rgba(127, 127, 127, 0.30); }
+
+#centralwidget QLabel { background: transparent; }
+#centralwidget QCheckBox { background: transparent; }
+#centralwidget QTabBar { background: transparent; }
+#centralwidget, #splitter, #sidebar, #tab_action_log, #tab_manage, #tab_coding,
+#tab_reports, #tab_ai_agent { background: transparent; }
+
+#centralwidget QTabWidget::pane { border: none; }
+#centralwidget QTabBar::tab { border: none; padding: 6px 14px; margin-right: 4px; border-radius: 8px; }
+#centralwidget QTabBar::tab:selected { background: rgba(127, 127, 127, 0.26); }
+#centralwidget QTabBar::tab:hover { background: rgba(127, 127, 127, 0.14); }
+
+#centralwidget QTextEdit#textEdit, #centralwidget QFrame#sidebar_frame {
+    border: 1px solid rgba(127, 127, 127, 0.30);
+    border-radius: 8px;
+}
+
+#centralwidget QLineEdit { border: 1px solid rgba(127, 127, 127, 0.40); border-radius: 8px; padding: 2px 8px; }
+#centralwidget QLineEdit:focus { border: 1px solid rgba(46, 134, 222, 0.85); }
+#centralwidget QComboBox { border: 1px solid rgba(127, 127, 127, 0.40); border-radius: 8px; padding: 2px 8px; }
+
+#centralwidget QSplitter::handle { background: transparent; }
+
+#centralwidget QScrollBar:vertical { border: none; background: transparent; width: 10px; margin: 0px; }
+#centralwidget QScrollBar:horizontal { border: none; background: transparent; height: 10px; margin: 0px; }
+#centralwidget QScrollBar::handle:vertical, #centralwidget QScrollBar::handle:horizontal {
+    background: rgba(127, 127, 127, 0.45);
+    border-radius: 5px;
+    min-height: 24px;
+    min-width: 24px;
+}
+#centralwidget QScrollBar::handle:vertical:hover, #centralwidget QScrollBar::handle:horizontal:hover {
+    background: rgba(127, 127, 127, 0.70);
+}
+#centralwidget QScrollBar::add-line, #centralwidget QScrollBar::sub-line { width: 0px; height: 0px; }
+#centralwidget QScrollBar::add-page, #centralwidget QScrollBar::sub-page { background: transparent; }
+</string>
+   </property>
    <layout class="QHBoxLayout" name="horizontalLayout">
+    <property name="spacing">
+     <number>0</number>
+    </property>
+    <property name="bottomMargin">
+     <number>8</number>
+    </property>
+    <property name="rightMargin">
+     <number>8</number>
+    </property>
+    <property name="topMargin">
+     <number>8</number>
+    </property>
+    <property name="leftMargin">
+     <number>8</number>
+    </property>
     <item>
      <widget class="QSplitter" name="splitter">
       <property name="frameShape">
@@ -26,6 +92,9 @@
       <property name="childrenCollapsible">
        <bool>false</bool>
       </property>
+      <property name="handleWidth">
+       <number>8</number>
+      </property>
       <widget class="QTabWidget" name="tabWidget">
        <property name="tabPosition">
         <enum>QTabWidget::TabPosition::North</enum>
@@ -36,13 +105,28 @@
        <property name="currentIndex">
         <number>0</number>
        </property>
+       <property name="documentMode">
+        <bool>true</bool>
+       </property>
        <widget class="QWidget" name="tab_action_log">
         <attribute name="title">
          <string>Action Log</string>
         </attribute>
         <layout class="QGridLayout" name="gridLayout_2">
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>8</number>
+         </property>
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
          <item row="0" column="0">
-          <widget class="QTextEdit" name="textEdit"/>
+          <widget class="QTextEdit" name="textEdit" />
          </item>
         </layout>
        </widget>
@@ -50,64 +134,97 @@
         <attribute name="title">
          <string>Manage</string>
         </attribute>
-        <widget class="QTextBrowser" name="textBrowser_manage">
-         <property name="geometry">
-          <rect>
-           <x>10</x>
-           <y>10</y>
-           <width>780</width>
-           <height>500</height>
-          </rect>
+        <layout class="QVBoxLayout" name="verticalLayout_manage">
+         <property name="leftMargin">
+          <number>0</number>
          </property>
-         <property name="plainText">
-          <string>Select an option from the Manage menu</string>
+         <property name="topMargin">
+          <number>8</number>
          </property>
-         <property name="openExternalLinks">
-          <bool>true</bool>
+         <property name="rightMargin">
+          <number>0</number>
          </property>
-        </widget>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QTextBrowser" name="textBrowser_manage">
+           <property name="plainText">
+            <string>Select an option from the Manage menu</string>
+           </property>
+           <property name="openExternalLinks">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </widget>
        <widget class="QWidget" name="tab_coding">
         <attribute name="title">
          <string>Coding</string>
         </attribute>
-        <widget class="QTextBrowser" name="textBrowser_coding">
-         <property name="geometry">
-          <rect>
-           <x>10</x>
-           <y>10</y>
-           <width>780</width>
-           <height>500</height>
-          </rect>
+        <layout class="QVBoxLayout" name="verticalLayout_coding">
+         <property name="leftMargin">
+          <number>0</number>
          </property>
-         <property name="plainText">
-          <string>Select an option from the coding menu</string>
+         <property name="topMargin">
+          <number>8</number>
          </property>
-         <property name="openExternalLinks">
-          <bool>true</bool>
+         <property name="rightMargin">
+          <number>0</number>
          </property>
-        </widget>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QTextBrowser" name="textBrowser_coding">
+           <property name="plainText">
+            <string>Select an option from the coding menu</string>
+           </property>
+           <property name="openExternalLinks">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </widget>
        <widget class="QWidget" name="tab_reports">
         <attribute name="title">
          <string>Reports</string>
         </attribute>
-        <widget class="QTextBrowser" name="textBrowser_reports">
-         <property name="geometry">
-          <rect>
-           <x>10</x>
-           <y>10</y>
-           <width>780</width>
-           <height>500</height>
-          </rect>
+        <layout class="QVBoxLayout" name="verticalLayout_reports">
+         <property name="leftMargin">
+          <number>0</number>
          </property>
-         <property name="plainText">
-          <string>Select an option from the Analysis or Reports menu</string>
+         <property name="topMargin">
+          <number>8</number>
          </property>
-         <property name="openExternalLinks">
-          <bool>true</bool>
+         <property name="rightMargin">
+          <number>0</number>
          </property>
-        </widget>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <property name="spacing">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="QTextBrowser" name="textBrowser_reports">
+           <property name="plainText">
+            <string>Select an option from the Analysis or Reports menu</string>
+           </property>
+           <property name="openExternalLinks">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </widget>
        <widget class="QWidget" name="tab_ai_agent">
         <attribute name="title">
@@ -191,101 +308,101 @@
      <property name="title">
       <string>Open Recent Project</string>
      </property>
-     <addaction name="actionNone"/>
+     <addaction name="actionNone" />
     </widget>
     <widget class="QMenu" name="menuExport">
      <property name="title">
       <string>Export</string>
      </property>
-     <addaction name="actionProject_Exchange_Export"/>
-     <addaction name="actionREFI_Codebook_export"/>
-     <addaction name="actionExport_codebook"/>
-     <addaction name="actionExport_codebook_with_memos"/>
+     <addaction name="actionProject_Exchange_Export" />
+     <addaction name="actionREFI_Codebook_export" />
+     <addaction name="actionExport_codebook" />
+     <addaction name="actionExport_codebook_with_memos" />
     </widget>
     <widget class="QMenu" name="menuImport">
      <property name="title">
       <string>Import</string>
      </property>
-     <addaction name="actionREFI_Codebook_import"/>
-     <addaction name="actionREFI_QDA_Project_import"/>
-     <addaction name="actionTaguette_import"/>
-     <addaction name="actionRQDA_Project_import"/>
-     <addaction name="actionSonal_import"/>
-     <addaction name="actionImport_plain_text_codes_list"/>
+     <addaction name="actionREFI_Codebook_import" />
+     <addaction name="actionREFI_QDA_Project_import" />
+     <addaction name="actionTaguette_import" />
+     <addaction name="actionRQDA_Project_import" />
+     <addaction name="actionSonal_import" />
+     <addaction name="actionImport_plain_text_codes_list" />
     </widget>
-    <addaction name="actionCreate_New_Project"/>
-    <addaction name="actionOpen_Project"/>
-    <addaction name="menuOpen_Recent_Project"/>
-    <addaction name="actionClose_Project"/>
-    <addaction name="actionProject_Memo"/>
-    <addaction name="actionSettings"/>
-    <addaction name="actionProject_summary"/>
-    <addaction name="separator"/>
-    <addaction name="menuImport"/>
-    <addaction name="menuExport"/>
-    <addaction name="separator"/>
-    <addaction name="actionExit"/>
+    <addaction name="actionCreate_New_Project" />
+    <addaction name="actionOpen_Project" />
+    <addaction name="menuOpen_Recent_Project" />
+    <addaction name="actionClose_Project" />
+    <addaction name="actionProject_Memo" />
+    <addaction name="actionSettings" />
+    <addaction name="actionProject_summary" />
+    <addaction name="separator" />
+    <addaction name="menuImport" />
+    <addaction name="menuExport" />
+    <addaction name="separator" />
+    <addaction name="actionExit" />
    </widget>
    <widget class="QMenu" name="menuFiles_and_Cases">
     <property name="title">
      <string>Manage</string>
     </property>
-    <addaction name="actionManage_files"/>
-    <addaction name="actionManage_cases"/>
-    <addaction name="actionManage_journals"/>
-    <addaction name="actionManage_attributes"/>
-    <addaction name="actionManage_references"/>
-    <addaction name="actionManage_bad_links_to_files"/>
+    <addaction name="actionManage_files" />
+    <addaction name="actionManage_cases" />
+    <addaction name="actionManage_journals" />
+    <addaction name="actionManage_attributes" />
+    <addaction name="actionManage_references" />
+    <addaction name="actionManage_bad_links_to_files" />
    </widget>
    <widget class="QMenu" name="menuCoding">
     <property name="title">
      <string>Coding</string>
     </property>
-    <addaction name="actionCodes"/>
-    <addaction name="actionCode_image"/>
-    <addaction name="actionCode_audio_video"/>
-    <addaction name="actionCode_pdf"/>
-    <addaction name="actionAI_assisted_coding"/>
-    <addaction name="actionCode_organiser"/>
-    <addaction name="actionColour_scheme"/>
+    <addaction name="actionCodes" />
+    <addaction name="actionCode_image" />
+    <addaction name="actionCode_audio_video" />
+    <addaction name="actionCode_pdf" />
+    <addaction name="actionAI_assisted_coding" />
+    <addaction name="actionCode_organiser" />
+    <addaction name="actionColour_scheme" />
    </widget>
    <widget class="QMenu" name="menuReports">
     <property name="title">
      <string>Reports</string>
     </property>
-    <addaction name="actionCoding_comparison"/>
-    <addaction name="actionCoding_comparison_by_file"/>
-    <addaction name="actionCode_comparison_table"/>
-    <addaction name="actionCode_frequencies"/>
-    <addaction name="actionFile_summary"/>
-    <addaction name="actionCode_summary"/>
-    <addaction name="actionCharts"/>
-    <addaction name="actionSQL_statements"/>
-    <addaction name="separator"/>
+    <addaction name="actionCoding_comparison" />
+    <addaction name="actionCoding_comparison_by_file" />
+    <addaction name="actionCode_comparison_table" />
+    <addaction name="actionCode_frequencies" />
+    <addaction name="actionFile_summary" />
+    <addaction name="actionCode_summary" />
+    <addaction name="actionCharts" />
+    <addaction name="actionSQL_statements" />
+    <addaction name="separator" />
    </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
      <string>Help</string>
     </property>
-    <addaction name="actionContents"/>
-    <addaction name="actionAsk_the_AI_Agent"/>
-    <addaction name="actionAbout"/>
-    <addaction name="actionSpecial_functions"/>
-    <addaction name="actionMenu_Key_Shortcuts"/>
+    <addaction name="actionContents" />
+    <addaction name="actionAsk_the_AI_Agent" />
+    <addaction name="actionAbout" />
+    <addaction name="actionSpecial_functions" />
+    <addaction name="actionMenu_Key_Shortcuts" />
    </widget>
    <widget class="QMenu" name="menuAI">
     <property name="title">
      <string>AI</string>
     </property>
-    <addaction name="actionAI_Agent"/>
-    <addaction name="actionAI_Agent_Sidebar"/>
-    <addaction name="actionAI_Search_and_Coding"/>
-    <addaction name="actionAI_Prompts"/>
-    <addaction name="separator"/>
-    <addaction name="actionCheck_project_AI_readiness"/>
-    <addaction name="actionAI_Setup_wizard"/>
-    <addaction name="actionAI_Configuration"/>
-    <addaction name="actionAI_Rebuild_internal_memory"/>
+    <addaction name="actionAI_Agent" />
+    <addaction name="actionAI_Agent_Sidebar" />
+    <addaction name="actionAI_Search_and_Coding" />
+    <addaction name="actionAI_Prompts" />
+    <addaction name="separator" />
+    <addaction name="actionCheck_project_AI_readiness" />
+    <addaction name="actionAI_Setup_wizard" />
+    <addaction name="actionAI_Configuration" />
+    <addaction name="actionAI_Rebuild_internal_memory" />
    </widget>
    <widget class="QMenu" name="menuAnalysis">
     <property name="title">
@@ -298,27 +415,27 @@
      <property name="toolTipsVisible">
       <bool>true</bool>
      </property>
-     <addaction name="actionAI_topic_exploration"/>
-     <addaction name="actionAI_text_analysis"/>
-     <addaction name="actionAI_code_analysis"/>
+     <addaction name="actionAI_topic_exploration" />
+     <addaction name="actionAI_text_analysis" />
+     <addaction name="actionAI_code_analysis" />
     </widget>
-    <addaction name="actionCoding_reports"/>
-    <addaction name="actionCode_co_occurrence"/>
-    <addaction name="actionCode_relations"/>
-    <addaction name="actionCode_text_exact_matches"/>
-    <addaction name="actionText_segments_by_codes"/>
-    <addaction name="actionView_Graph"/>
-    <addaction name="menuAI_assisted_analysis"/>
+    <addaction name="actionCoding_reports" />
+    <addaction name="actionCode_co_occurrence" />
+    <addaction name="actionCode_relations" />
+    <addaction name="actionCode_text_exact_matches" />
+    <addaction name="actionText_segments_by_codes" />
+    <addaction name="actionView_Graph" />
+    <addaction name="menuAI_assisted_analysis" />
    </widget>
-   <addaction name="menuProject"/>
-   <addaction name="menuFiles_and_Cases"/>
-   <addaction name="menuCoding"/>
-   <addaction name="menuAnalysis"/>
-   <addaction name="menuReports"/>
-   <addaction name="menuAI"/>
-   <addaction name="menuHelp"/>
+   <addaction name="menuProject" />
+   <addaction name="menuFiles_and_Cases" />
+   <addaction name="menuCoding" />
+   <addaction name="menuAnalysis" />
+   <addaction name="menuReports" />
+   <addaction name="menuAI" />
+   <addaction name="menuHelp" />
   </widget>
-  <widget class="QStatusBar" name="statusbar"/>
+  <widget class="QStatusBar" name="statusbar" />
   <action name="actionCreate_New_Project">
    <property name="text">
     <string>Create New Project</string>
@@ -746,6 +863,6 @@
    </property>
   </action>
  </widget>
- <resources/>
- <connections/>
+ <resources />
+ <connections />
 </ui>
