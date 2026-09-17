@@ -8344,9 +8344,9 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
     MAX_WIDTH = 300
     MAX_HEIGHT = 300
     BASE_SIDE = 200
-    PDF_RENDER_ZOOM = 3
-    HIRES_MAX_SIDE = 1200  # enough for the 600 px resize limit at 2x
-    OVERSAMPLE = 3.0
+    PDF_RENDER_ZOOM = 2
+    HIRES_MAX_SIDE = 800  # sharp enough at normal zoom, light on memory
+    OVERSAMPLE = 2.0
 
     def __init__(self, app, imid=-1, x=10, y=10, px=0, py=0, pwidth=0, pheight=0, path_="", grpixid=None,
                  pdf_page=None):
