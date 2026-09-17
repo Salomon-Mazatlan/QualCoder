@@ -6586,17 +6586,32 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
     def adjust_for_negative_positions(self):
         """ Move all items if negative positions. """
 
+        # Only top-level nodes move; children (label chips, handles) follow their parent.
+        # Lines and their labels are redrawn from the moved nodes afterwards.
+        movable = [i for i in self.items()
+                   if i.parentItem() is None
+                   and not isinstance(i, (LinkGraphicsItem, FreeLineGraphicsItem))
+                   and not getattr(i, '_is_line_label', False)]
         min_adjust_x = 0
         min_adjust_y = 0
-        for i in self.items():
+        for i in movable:
             if i.pos().x() < min_adjust_x:
                 min_adjust_x = i.pos().x()
-            if i.pos().y() < min_adjust_x:
+            if i.pos().y() < min_adjust_y:
                 min_adjust_y = i.pos().y()
         if min_adjust_x < 0 or min_adjust_y < 0:
-            for i in self.items():
-                if not (isinstance(i, LinkGraphicsItem) or isinstance(i, FreeLineGraphicsItem)):
-                    i.setPos(i.pos().x() - min_adjust_x, i.pos().y() - min_adjust_y)
+            for i in movable:
+                i.setPos(i.pos().x() - min_adjust_x, i.pos().y() - min_adjust_y)
+                if getattr(i, 'code_or_cat', None) is not None and 'x' in i.code_or_cat:
+                    i.code_or_cat['x'] = i.pos().x()
+                    i.code_or_cat['y'] = i.pos().y()
+            for line in self.items():
+                if isinstance(line, (LinkGraphicsItem, FreeLineGraphicsItem)):
+                    try:
+                        line.redraw()
+                    except RuntimeError:
+                        pass
+            self.update()
 
     def suggested_scene_size(self):
         """ Calculate the actual size of the scene, allowing margins for free panning. """
