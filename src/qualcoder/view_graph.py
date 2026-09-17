@@ -108,6 +108,51 @@ def compute_edge_point(center_source, center_target, rect, is_ellipse):
     return QtCore.QPointF(center_source.x() + dx * t, center_source.y() + dy * t)
 
 
+# shared loader for coded image and PDF areas (graph nodes and the graph picker preview)
+def load_coded_image_area(project_path, path_, px, py, pwidth, pheight, pdf_page,
+                          pdf_zoom=2, max_side=800):
+    """ Return the coded area as a QImage (null on failure).
+    PDF areas are rendered only inside the clip, enlarged up to max_side. """
+    path_ = path_ or ""
+    px, py = float(px or 0), float(py or 0)
+    if pdf_page is not None:
+        source_path = ""
+        if path_[:6] == "/docs/":
+            source_path = f"{project_path}/documents/{path_[6:]}"
+        if path_[:5] == "docs:":
+            source_path = path_[5:]
+        image = QtGui.QImage()
+        try:
+            pymu_pdf = pymupdf.open(source_path)
+            try:
+                if 0 <= int(pdf_page) < len(pymu_pdf):
+                    page = pymu_pdf.load_page(int(pdf_page))
+                    width = float(pwidth or page.rect.width)
+                    height = float(pheight or page.rect.height)
+                    longest = max(width, height, 1.0)
+                    zoom = min(pdf_zoom, max_side / longest)
+                    # Coordinates are 72 dpi on the displayed page
+                    clip = pymupdf.Rect(px, py, px + width, py + height)
+                    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip,
+                                          alpha=False, annots=False)
+                    image = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride,
+                                         QtGui.QImage.Format.Format_RGB888).copy()
+            finally:
+                pymu_pdf.close()
+        except Exception as err:
+            logger.warning(f"Graph pdf area: {source_path} {err}")
+        return image
+    abs_path_ = project_path + path_
+    if path_[0:7] == "images:":
+        abs_path_ = path_[7:]
+    image = QtGui.QImageReader(abs_path_).read()
+    if image.isNull():
+        return image
+    width = int(pwidth or image.width())
+    height = int(pheight or image.height())
+    return image.copy(int(px), int(py), width, height)
+
+
 # DialogMemo doubles as QualCoder's generic plain-text editor; the graph
 # uses it for "Edit text" on nodes. Hide the memo-specific toolbar (clear, insert
 # date/quote/memo-link, export linked), which makes no sense on a node text.
@@ -5891,6 +5936,33 @@ class DialogSelectGraphBranch(QDialog):
         super().accept()
 
 
+class _PreviewPixmapItem(QtWidgets.QGraphicsItem):
+    """ Image node for the graph picker preview. Rescales the source to the on-screen size,
+    so strong zoom-out does not produce moire or jagged pixels. """
+
+    def __init__(self, image, logical_w, logical_h):
+        super().__init__()
+        self._image = image
+        self._rect = QtCore.QRectF(0, 0, logical_w, logical_h)
+        self._cache = QtGui.QPixmap()
+
+    def boundingRect(self):
+        return self._rect
+
+    def paint(self, painter, option, widget=None):
+        lod = QtWidgets.QStyleOptionGraphicsItem.levelOfDetailFromTransform(painter.worldTransform())
+        ratio = widget.devicePixelRatioF() if widget is not None else 1.0
+        target_w = max(1, min(self._image.width(), int(round(self._rect.width() * lod * ratio))))
+        # Rebuild only when the needed size changes noticeably
+        if self._cache.isNull() or abs(self._cache.width() - target_w) > max(2, 0.15 * target_w):
+            target_h = max(1, int(round(target_w * self._image.height() / self._image.width())))
+            self._cache = QtGui.QPixmap.fromImage(self._image.scaled(
+                target_w, target_h, QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation))
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(self._rect, self._cache, QtCore.QRectF(self._cache.rect()))
+
+
 class DialogGraphPicker(QDialog):
     """ Picker for Load graph / Delete graphs with live preview. """
 
@@ -5909,6 +5981,7 @@ class DialogGraphPicker(QDialog):
                 QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.preview_scene = QtWidgets.QGraphicsScene(self)
         self.ui.graphicsView_preview.setScene(self.preview_scene)
+        self._setup_preview_view()
         # sort options now live inside the picker itself,
         # initialized from the load-button menu option and changeable on the fly.
         self._order_keys = ["Alphabet ascending", "Alphabet descending",
@@ -5923,6 +5996,71 @@ class DialogGraphPicker(QDialog):
         self.ui.buttonBox.accepted.connect(self.accept)
         self.ui.buttonBox.rejected.connect(self.reject)
         self._populate_list()
+
+    PREVIEW_MAX_FIT_SCALE = 1.5  # small graphs are not blown up
+    PREVIEW_MAX_ZOOM = 4.0
+
+    def _setup_preview_view(self):
+        """ Larger preview with smooth drawing, wheel zoom, drag to pan and double-click to fit. """
+        view = self.ui.graphicsView_preview
+        view.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing
+                            | QtGui.QPainter.RenderHint.TextAntialiasing
+                            | QtGui.QPainter.RenderHint.SmoothPixmapTransform)
+        view.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
+        view.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        view.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        view.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        hint = _("Mouse wheel: zoom. Drag: move. Double click: fit to view.")
+        view.setToolTip(hint)
+        self.ui.label_preview.setText(self.ui.label_preview.text() + "   " + hint)
+        view.viewport().installEventFilter(self)
+        self._fit_scale = 1.0
+        # Give most of the width to the preview
+        self.ui.splitter.setStretchFactor(0, 0)
+        self.ui.splitter.setStretchFactor(1, 1)
+        screen = self.screen().availableGeometry() if self.screen() is not None else None
+        width, height = 1150, 720
+        if screen is not None:
+            width = min(width, int(screen.width() * 0.9))
+            height = min(height, int(screen.height() * 0.9))
+        self.resize(max(self.width(), width), max(self.height(), height))
+        self.ui.splitter.setSizes([260, max(420, self.width() - 260)])
+
+    def _fit_preview(self):
+        """ Fit the whole graph in the view, without enlarging small graphs too much. """
+        view = self.ui.graphicsView_preview
+        rect = self.preview_scene.sceneRect()
+        if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
+            return
+        viewport = view.viewport().rect()
+        if viewport.width() <= 2 or viewport.height() <= 2:
+            return
+        scale = min((viewport.width() - 4) / rect.width(), (viewport.height() - 4) / rect.height())
+        scale = max(0.01, min(scale, self.PREVIEW_MAX_FIT_SCALE))
+        view.resetTransform()
+        view.scale(scale, scale)
+        view.centerOn(rect.center())
+        self._fit_scale = scale
+
+    def eventFilter(self, obj, event):
+        """ Zoom with the wheel and fit with a double click inside the preview. """
+        if obj is self.ui.graphicsView_preview.viewport():
+            if event.type() == QtCore.QEvent.Type.Wheel:
+                steps = event.angleDelta().y() / 120.0
+                if steps:
+                    view = self.ui.graphicsView_preview
+                    current = view.transform().m11()
+                    factor = 1.25 ** steps
+                    min_scale = self._fit_scale
+                    max_scale = max(self.PREVIEW_MAX_ZOOM, self._fit_scale)
+                    new_scale = max(min_scale, min(current * factor, max_scale))
+                    if current > 0 and abs(new_scale - current) > 1e-6:
+                        view.scale(new_scale / current, new_scale / current)
+                return True
+            if event.type() == QtCore.QEvent.Type.MouseButtonDblClick:
+                self._fit_preview()
+                return True
+        return super().eventFilter(obj, event)
 
     def _populate_list(self, *_args):
         """ Fill (or re-fill) the graph list using the selected sort order. """
@@ -6101,37 +6239,13 @@ class DialogGraphPicker(QDialog):
         return shape.sceneBoundingRect()
 
     def _preview_pixmap(self, x, y, px, py, w, h, filepath, pdf_page):
-        """ PixmapGraphicsItem look: the actual image, cropped and scaled to a
-        maximum of 200px like the real item. Falls back to a gray placeholder. """
-        try:
-            abs_path_ = self.app.project_path + (filepath or "")
-            if (filepath or "")[0:7] == "images:":
-                abs_path_ = filepath[7:]
-            if pdf_page is not None:
-                source_path = ""
-                if (filepath or "")[:6] == "/docs/":
-                    source_path = f"{self.app.project_path}/documents/{filepath[6:]}"
-                if (filepath or "")[:5] == "docs:":
-                    source_path = filepath[5:]
-                pymu_pdf = pymupdf.open(source_path)
-                page = pymu_pdf[pdf_page]
-                pm = page.get_pixmap(annots=False)  # PDF highlights/notes not painted
-                abs_path_ = Path(self.app.confighome) / "tmp_preview_pdf_page.png"
-                pm.save(str(abs_path_))  # Assume needs String
-            image = QtGui.QImageReader(abs_path_).read()
-            if image.isNull():
-                raise ValueError("null image")
-            image = image.copy(int(px or 0), int(py or 0), int(w or image.width()), int(h or image.height()))
-            scaler = min(1.0, 200 / image.width() if image.width() > 200 else 1.0,
-                         200 / image.height() if image.height() > 200 else 1.0)
-            pixmap = QtGui.QPixmap().fromImage(image)
-            pixmap = pixmap.scaled(int(image.width() * scaler), int(image.height() * scaler))
-            item = QtWidgets.QGraphicsPixmapItem(pixmap)
-            item.setPos(x, y)
-            item.setZValue(1)
-            self.preview_scene.addItem(item)
-            return item.sceneBoundingRect()
-        except Exception:
+        """ PixmapGraphicsItem look: the actual image, cropped and fitted to 200px
+        like the real item, with extra pixels so zooming stays sharp. Falls back to a gray placeholder. """
+        base_side = PixmapGraphicsItem.BASE_SIDE
+        image = load_coded_image_area(self.app.project_path, filepath, px, py, w, h, pdf_page,
+                                      pdf_zoom=PixmapGraphicsItem.PDF_RENDER_ZOOM,
+                                      max_side=base_side * PixmapGraphicsItem.OVERSAMPLE)
+        if image.isNull() or image.width() <= 0 or image.height() <= 0:
             rect = QtWidgets.QGraphicsRectItem(0, 0, max(30, (w or 90) / 3), max(20, (h or 60) / 3))
             rect.setBrush(QtGui.QBrush(QtGui.QColor("#E8E8E8")))
             rect.setPen(QtGui.QPen(QtGui.QColor("#909090"), 0.5))
@@ -6139,6 +6253,21 @@ class DialogGraphPicker(QDialog):
             rect.setZValue(1)
             self.preview_scene.addItem(rect)
             return rect.sceneBoundingRect()
+        # On-canvas size in graph units, same rule as the real node
+        area_w = float(w or image.width())
+        area_h = float(h or image.height())
+        scaler = min(1.0, base_side / area_w, base_side / area_h)
+        logical_w = max(1.0, area_w * scaler)
+        target_w = max(1, int(round(min(image.width(), logical_w * PixmapGraphicsItem.OVERSAMPLE))))
+        target_h = max(1, int(round(target_w * image.height() / image.width())))
+        if target_w != image.width():
+            image = image.scaled(target_w, target_h, QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                                 QtCore.Qt.TransformationMode.SmoothTransformation)
+        item = _PreviewPixmapItem(image, logical_w, logical_w * image.height() / image.width())
+        item.setPos(x, y)
+        item.setZValue(1)
+        self.preview_scene.addItem(item)
+        return item.sceneBoundingRect()
 
     def _preview_av(self, x, y, color):
         """ AVGraphicsItem look: colored chip with a play marker. """
@@ -6382,22 +6511,16 @@ class DialogGraphPicker(QDialog):
         rect = self.preview_scene.itemsBoundingRect().adjusted(-20, -20, 20, 20)
         if rect.isValid():
             self.preview_scene.setSceneRect(rect)
-            self.ui.graphicsView_preview.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+            self._fit_preview()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        rect = self.preview_scene.sceneRect()
-        if rect.isValid():
-            self.ui.graphicsView_preview.fitInView(rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_preview()
 
     def showEvent(self, event):
-        # first fitInView only works once the view has real geometry
+        # first fit only works once the view has real geometry
         super().showEvent(event)
-        rect = self.preview_scene.sceneRect()
-        if rect.isValid():
-            QtCore.QTimer.singleShot(
-                0, lambda: self.ui.graphicsView_preview.fitInView(
-                    rect, QtCore.Qt.AspectRatioMode.KeepAspectRatio))
+        QtCore.QTimer.singleShot(0, self._fit_preview)
 
 
 class GraphicsScene(QtWidgets.QGraphicsScene):
@@ -8400,39 +8523,9 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
 
     def _load_segment_image(self):
         """ Return the coded area as a full resolution QImage. """
-        if self.pdf_page is not None:
-            source_path = ""
-            if self.path_[:6] == "/docs/":
-                source_path = f"{self.app.project_path}/documents/{self.path_[6:]}"
-            if self.path_[:5] == "docs:":
-                source_path = self.path_[5:]
-            image = QtGui.QImage()
-            # Enlarge small areas, but never render beyond the high-resolution cap
-            longest = max(float(self.pwidth), float(self.pheight), 1.0)
-            zoom = min(self.PDF_RENDER_ZOOM, self.HIRES_MAX_SIDE / longest)
-            try:
-                pymu_pdf = pymupdf.open(source_path)
-                try:
-                    if 0 <= self.pdf_page < len(pymu_pdf):
-                        page = pymu_pdf.load_page(self.pdf_page)
-                        # Coordinates are 72 dpi on the displayed page; render only that area, enlarged
-                        clip = pymupdf.Rect(self.px, self.py, self.px + self.pwidth, self.py + self.pheight)
-                        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip,
-                                              alpha=False, annots=False)
-                        image = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride,
-                                             QtGui.QImage.Format.Format_RGB888).copy()
-                finally:
-                    pymu_pdf.close()
-            except Exception as err:
-                logger.warning(f"Graph pdf area: {source_path} {err}")
-            return image
-        abs_path_ = self.app.project_path + self.path_
-        if self.path_[0:7] == "images:":
-            abs_path_ = self.path_[7:]
-        image = QtGui.QImageReader(abs_path_).read()
-        if image.isNull():
-            return image
-        return image.copy(int(self.px), int(self.py), int(self.pwidth), int(self.pheight))
+        return load_coded_image_area(self.app.project_path, self.path_, self.px, self.py,
+                                     self.pwidth, self.pheight, self.pdf_page,
+                                     self.PDF_RENDER_ZOOM, self.HIRES_MAX_SIDE)
 
     def reload_image(self):
         """ Rebuild the high-resolution pixmap from the source file. Returns True on success. """
