@@ -455,9 +455,9 @@ class ExportDirectoryPathDialog:
         options = QtWidgets.QFileDialog.Option.DontResolveSymlinks | QtWidgets.QFileDialog.Option.ShowDirsOnly
         directory = QtWidgets.QFileDialog.getExistingDirectory(None,
                                                                _("Select directory to save file"),
-                                                               app.last_export_directory, options)
+                                                               str(app.last_export_directory or ""), options)
         if directory:
-            if directory != app.last_export_directory:
+            if directory != str(app.last_export_directory):
                 app.last_export_directory = directory
             self.filepath = directory + "/" + filename_only + "." + extension
             counter = 0
