@@ -457,8 +457,7 @@ class ExportDirectoryPathDialog:
                                                                _("Select directory to save file"),
                                                                str(app.last_export_directory or ""), options)
         if directory:
-            if directory != str(app.last_export_directory):
-                app.last_export_directory = directory
+            app.last_export_directory = directory
             self.filepath = directory + "/" + filename_only + "." + extension
             counter = 0
             while Path(self.filepath).exists():
