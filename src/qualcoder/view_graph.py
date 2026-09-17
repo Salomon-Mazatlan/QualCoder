@@ -153,6 +153,32 @@ def load_coded_image_area(project_path, path_, px, py, pwidth, pheight, pdf_page
     return image.copy(int(px), int(py), width, height)
 
 
+# shared by ViewGraph.load_graph and the graph picker preview
+def apply_saved_graph_visibility(scene):
+    """ Restore collapsed state and hide segments whose code node is hidden. """
+    for item in scene.items():
+        if type(item).__name__ == "TextGraphicsItem":
+            children_names = item.code_or_cat.get('child_names', [])
+            if children_names:
+                children_items = [child for child in scene.items()
+                                  if type(child).__name__ == "TextGraphicsItem"
+                                  and child != item
+                                  and child.code_or_cat['name'] in children_names]
+                # All children hidden -> the parent was saved collapsed
+                if children_items and all(not child.isVisible() for child in children_items):
+                    item.is_collapsed = True
+        elif type(item).__name__ in ("FreeTextGraphicsItem", "PixmapGraphicsItem", "AVGraphicsItem"):
+            if hasattr(item, 'code_or_cat') and item.code_or_cat is not None:
+                item_cid = item.code_or_cat.get('cid')
+                if item_cid is not None:
+                    # Hide segment if its parent code node is hidden
+                    parent_node = next((node for node in scene.items()
+                                        if type(node).__name__ == "TextGraphicsItem"
+                                        and node.code_or_cat.get('cid') == item_cid), None)
+                    if parent_node and not parent_node.isVisible():
+                        item.hide()
+
+
 # DialogMemo doubles as QualCoder's generic plain-text editor; the graph
 # uses it for "Edit text" on nodes. Hide the memo-specific toolbar (clear, insert
 # date/quote/memo-link, export linked), which makes no sense on a node text.
@@ -5445,28 +5471,7 @@ class ViewGraph(QDialog):
         # Load lines
         self.load_cdct_line_graphics_items(grid)
         self.load_free_line_graphics_items(grid)
-        # restore collapsed state and segment visibility after loading
-        for item in self.scene.items():
-            if type(item).__name__ == "TextGraphicsItem":
-                children_names = item.code_or_cat.get('child_names', [])
-                if children_names:
-                    children_items = [child for child in self.scene.items()
-                                      if type(child).__name__ == "TextGraphicsItem"
-                                      and child != item
-                                      and child.code_or_cat['name'] in children_names]
-                    # All children hidden -> the parent was saved collapsed
-                    if children_items and all(not child.isVisible() for child in children_items):
-                        item.is_collapsed = True
-            elif type(item).__name__ in ("FreeTextGraphicsItem", "PixmapGraphicsItem", "AVGraphicsItem"):
-                if hasattr(item, 'code_or_cat') and item.code_or_cat is not None:
-                    item_cid = item.code_or_cat.get('cid')
-                    if item_cid is not None:
-                        # Hide segment if its parent code node is hidden
-                        parent_node = next((node for node in self.scene.items()
-                                            if type(node).__name__ == "TextGraphicsItem"
-                                            and node.code_or_cat.get('cid') == item_cid), None)
-                        if parent_node and not parent_node.isVisible():
-                            item.hide()
+        apply_saved_graph_visibility(self.scene)
         if err_msg != "":
             Message(self.app, _("Load graph errors"), err_msg).exec()
         label = _("Changing to another report will lose unsaved graph.") + "\n" + graph['name']
@@ -5936,35 +5941,53 @@ class DialogSelectGraphBranch(QDialog):
         super().accept()
 
 
-class _PreviewPixmapItem(QtWidgets.QGraphicsItem):
-    """ Image node for the graph picker preview. Rescales the source to the on-screen size,
-    so strong zoom-out does not produce moire or jagged pixels. """
+class _GraphPreviewLoader:
+    """ Minimal stand-in for ViewGraph so the saved-graph loaders can fill any scene.
+    The loaders only touch self.app, self.scene and named_children_of_node. """
 
-    def __init__(self, image, logical_w, logical_h):
-        super().__init__()
-        self._image = image
-        self._rect = QtCore.QRectF(0, 0, logical_w, logical_h)
-        self._cache = QtGui.QPixmap()
+    def __init__(self, app, scene):
+        self.app = app
+        self.scene = scene
 
-    def boundingRect(self):
-        return self._rect
+    named_children_of_node = ViewGraph.named_children_of_node
+    load_code_or_cat_text_graphics_items = ViewGraph.load_code_or_cat_text_graphics_items
+    load_file_text_graphics_items = ViewGraph.load_file_text_graphics_items
+    load_case_text_graphics_items = ViewGraph.load_case_text_graphics_items
+    load_free_text_graphics_items = ViewGraph.load_free_text_graphics_items
+    load_pixmap_graphics_items = ViewGraph.load_pixmap_graphics_items
+    load_av_graphics_items = ViewGraph.load_av_graphics_items
+    load_memo_graphics_items = ViewGraph.load_memo_graphics_items
+    load_cdct_line_graphics_items = ViewGraph.load_cdct_line_graphics_items
+    load_free_line_graphics_items = ViewGraph.load_free_line_graphics_items
 
-    def paint(self, painter, option, widget=None):
-        lod = QtWidgets.QStyleOptionGraphicsItem.levelOfDetailFromTransform(painter.worldTransform())
-        ratio = widget.devicePixelRatioF() if widget is not None else 1.0
-        target_w = max(1, min(self._image.width(), int(round(self._rect.width() * lod * ratio))))
-        # Rebuild only when the needed size changes noticeably
-        if self._cache.isNull() or abs(self._cache.width() - target_w) > max(2, 0.15 * target_w):
-            target_h = max(1, int(round(target_w * self._image.height() / self._image.width())))
-            self._cache = QtGui.QPixmap.fromImage(self._image.scaled(
-                target_w, target_h, QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation))
-        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawPixmap(self._rect, self._cache, QtCore.QRectF(self._cache.rect()))
+    def load(self, grid):
+        """ Same order as ViewGraph.load_graph. Returns the loader error text. """
+        err_msg = self.load_code_or_cat_text_graphics_items(grid)
+        err_msg += self.load_file_text_graphics_items(grid)
+        err_msg += self.load_case_text_graphics_items(grid)
+        err_msg += self.load_free_text_graphics_items(grid)
+        err_msg += self.load_pixmap_graphics_items(grid)
+        err_msg += self.load_av_graphics_items(grid)
+        err_msg += self.load_memo_graphics_items(grid)
+        self.load_cdct_line_graphics_items(grid)
+        self.load_free_line_graphics_items(grid)
+        apply_saved_graph_visibility(self.scene)
+        # On the canvas the lines are redrawn (and their labels placed) by later events
+        for item in list(self.scene.items()):
+            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
+                try:
+                    item.redraw()
+                except RuntimeError:
+                    pass
+        return err_msg
 
 
 class DialogGraphPicker(QDialog):
-    """ Picker for Load graph / Delete graphs with live preview. """
+    """ Picker for Load graph / Delete graphs. The preview is the saved graph itself,
+    built with the same item classes as the canvas and shown read-only, fitted to the view. """
+
+    PREVIEW_MARGIN = 20
+    PREVIEW_MAX_SCALE = 1.0  # never enlarge a small graph
 
     def __init__(self, app, title, multi=False, order_option="Alphabet ascending", parent=None):
         super().__init__(parent)
@@ -5997,24 +6020,18 @@ class DialogGraphPicker(QDialog):
         self.ui.buttonBox.rejected.connect(self.reject)
         self._populate_list()
 
-    PREVIEW_MAX_FIT_SCALE = 1.5  # small graphs are not blown up
-    PREVIEW_MAX_ZOOM = 4.0
-
     def _setup_preview_view(self):
-        """ Larger preview with smooth drawing, wheel zoom, drag to pan and double-click to fit. """
+        """ Read-only view, larger and with smooth drawing. """
         view = self.ui.graphicsView_preview
+        view.setInteractive(False)
         view.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing
                             | QtGui.QPainter.RenderHint.TextAntialiasing
                             | QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        view.setDragMode(QtWidgets.QGraphicsView.DragMode.ScrollHandDrag)
-        view.setTransformationAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        view.setResizeAnchor(QtWidgets.QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        view.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        view.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         view.setViewportUpdateMode(QtWidgets.QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
-        hint = _("Mouse wheel: zoom. Drag: move. Double click: fit to view.")
-        view.setToolTip(hint)
-        self.ui.label_preview.setText(self.ui.label_preview.text() + "   " + hint)
-        view.viewport().installEventFilter(self)
-        self._fit_scale = 1.0
+        self.preview_scene.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#FFFFFF")))
+        self._line_widths = []  # (line item, saved width) to keep lines visible when shrunk
         # Give most of the width to the preview
         self.ui.splitter.setStretchFactor(0, 0)
         self.ui.splitter.setStretchFactor(1, 1)
@@ -6025,42 +6042,6 @@ class DialogGraphPicker(QDialog):
             height = min(height, int(screen.height() * 0.9))
         self.resize(max(self.width(), width), max(self.height(), height))
         self.ui.splitter.setSizes([260, max(420, self.width() - 260)])
-
-    def _fit_preview(self):
-        """ Fit the whole graph in the view, without enlarging small graphs too much. """
-        view = self.ui.graphicsView_preview
-        rect = self.preview_scene.sceneRect()
-        if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
-            return
-        viewport = view.viewport().rect()
-        if viewport.width() <= 2 or viewport.height() <= 2:
-            return
-        scale = min((viewport.width() - 4) / rect.width(), (viewport.height() - 4) / rect.height())
-        scale = max(0.01, min(scale, self.PREVIEW_MAX_FIT_SCALE))
-        view.resetTransform()
-        view.scale(scale, scale)
-        view.centerOn(rect.center())
-        self._fit_scale = scale
-
-    def eventFilter(self, obj, event):
-        """ Zoom with the wheel and fit with a double click inside the preview. """
-        if obj is self.ui.graphicsView_preview.viewport():
-            if event.type() == QtCore.QEvent.Type.Wheel:
-                steps = event.angleDelta().y() / 120.0
-                if steps:
-                    view = self.ui.graphicsView_preview
-                    current = view.transform().m11()
-                    factor = 1.25 ** steps
-                    min_scale = self._fit_scale
-                    max_scale = max(self.PREVIEW_MAX_ZOOM, self._fit_scale)
-                    new_scale = max(min_scale, min(current * factor, max_scale))
-                    if current > 0 and abs(new_scale - current) > 1e-6:
-                        view.scale(new_scale / current, new_scale / current)
-                return True
-            if event.type() == QtCore.QEvent.Type.MouseButtonDblClick:
-                self._fit_preview()
-                return True
-        return super().eventFilter(obj, event)
 
     def _populate_list(self, *_args):
         """ Fill (or re-fill) the graph list using the selected sort order. """
@@ -6084,7 +6065,7 @@ class DialogGraphPicker(QDialog):
         if self.ui.listWidget_graphs.count() > 0:
             self.ui.listWidget_graphs.setCurrentRow(0)
         else:
-            self.preview_scene.clear()
+            self._clear_preview()
             self.ui.label_description.setText("")
 
     def get_selected(self):
@@ -6097,421 +6078,61 @@ class DialogGraphPicker(QDialog):
 
     def _on_current_changed(self, current, _previous):
         if current is None:
-            self.preview_scene.clear()
+            self._clear_preview()
             self.ui.label_description.setText("")
             return
         data = current.data(QtCore.Qt.ItemDataRole.UserRole)
         self.ui.label_description.setText(data.get('description') or "")
         self._render_preview(data['grid'])
 
-    def _preview_text(self, text, font_size=9, bold=False, text_color="#000000", max_len=40):
-        text = str(text or "")
-        if len(text) > max_len:
-            text = text[:max_len - 2] + "\u2026"
-        t = QtWidgets.QGraphicsSimpleTextItem(text)
-        f = QtGui.QFont()
-        f.setPointSize(max(6, int(font_size or 9)))
-        f.setBold(bool(bold))
-        t.setFont(f)
-        try:
-            t.setBrush(QtGui.QBrush(QtGui.QColor(text_color)))
-        except Exception:
-            t.setBrush(QtGui.QBrush(QtGui.QColor("#000000")))
-        return t
-
-    def _preview_code_or_cat(self, x, y, text, color_hex, font_size, bold, is_category):
-        """ TextGraphicsItem look: solid color rect (white for categories),
-        contrast text color, categories default to bold. """
-        if is_category:
-            color_hex = "#FFFFFF"
-        try:
-            contrast = TextColor(color_hex).recommendation
-        except Exception:
-            contrast = "#000000"
-        t = self._preview_text(text, font_size, bold or is_category, contrast)
-        br = t.boundingRect()
-        rect = QtWidgets.QGraphicsRectItem(br.adjusted(-3, -2, 3, 2))
-        rect.setBrush(QtGui.QBrush(QtGui.QColor(color_hex)))
-        rect.setPen(QtGui.QPen(QtGui.QColor("#B0B0B0"), 0.5) if is_category
-                    else QtGui.QPen(QtCore.Qt.PenStyle.NoPen))
-        rect.setPos(x, y)
-        t.setParentItem(rect)
-        rect.setZValue(1)
-        self.preview_scene.addItem(rect)
-        return rect.sceneBoundingRect()
-
-    def _preview_case(self, x, y, text, font_size, bold, text_color):
-        """ CaseTextGraphicsItem look: rounded rect, orange border, light bg. """
-        t = self._preview_text(text, font_size, bold, text_color if text_color != "white" else "#FFFFFF")
-        br = t.boundingRect().adjusted(-6, -4, 6, 4)
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(br, 12, 12)
-        shape = QtWidgets.QGraphicsPathItem(path)
-        shape.setBrush(QtGui.QBrush(QtGui.QColor("#101010" if text_color == "white" else "#fafafa")))
-        shape.setPen(QtGui.QPen(QtGui.QColor("#F57C00"), 2))
-        shape.setPos(x, y)
-        t.setParentItem(shape)
-        shape.setZValue(1)
-        self.preview_scene.addItem(shape)
-        return shape.sceneBoundingRect()
-
-    def _preview_file(self, x, y, text, font_size, bold, text_color):
-        """ FileTextGraphicsItem look: folded-corner note, blue border. """
-        t = self._preview_text(text, font_size, bold, text_color if text_color != "white" else "#FFFFFF")
-        br = t.boundingRect().adjusted(-4, -3, 8, 3)
-        w, h, fold = br.width(), br.height(), 8
-        poly = QtGui.QPolygonF([
-            QtCore.QPointF(br.left(), br.top()),
-            QtCore.QPointF(br.left() + w - fold, br.top()),
-            QtCore.QPointF(br.left() + w, br.top() + fold),
-            QtCore.QPointF(br.left() + w, br.top() + h),
-            QtCore.QPointF(br.left(), br.top() + h)])
-        shape = QtWidgets.QGraphicsPolygonItem(poly)
-        shape.setBrush(QtGui.QBrush(QtGui.QColor("#101010" if text_color == "white" else "#fafafa")))
-        shape.setPen(QtGui.QPen(QtGui.QColor("#1976D2"), 2))
-        shape.setPos(x, y)
-        fold_line = QtWidgets.QGraphicsLineItem(
-            br.left() + w - fold, br.top(), br.left() + w - fold, br.top() + fold, shape)
-        fold_line.setPen(QtGui.QPen(QtGui.QColor("#1976D2"), 2))
-        t.setParentItem(shape)
-        shape.setZValue(1)
-        self.preview_scene.addItem(shape)
-        return shape.sceneBoundingRect()
-
-    def _preview_free_text(self, x, y, text, font_size, bold, text_color):
-        """ FreeTextGraphicsItem look: plain rect, #fafafa bg (dark if the text
-        color is white), the stored color is the TEXT color. """
-        tc = text_color or "black"
-        t = self._preview_text(text, font_size, bold,
-                               "#FFFFFF" if tc == "white" else tc, max_len=60)
-        br = t.boundingRect().adjusted(-3, -2, 3, 2)
-        rect = QtWidgets.QGraphicsRectItem(br)
-        rect.setBrush(QtGui.QBrush(QtGui.QColor("#101010" if tc == "white" else "#fafafa")))
-        rect.setPen(QtGui.QPen(QtGui.QColor("#909090"), 0.5))
-        rect.setPos(x, y)
-        t.setParentItem(rect)
-        rect.setZValue(1)
-        self.preview_scene.addItem(rect)
-        return rect.sceneBoundingRect()
-
-    def _preview_memo(self, x, y, memo_source_type, memo_source_id, font_size):
-        """ MemoGraphicsItem look: light blue rounded rect, dashed blue border,
-        blue text, body read live from the source table. """
-        type_map = {
-            'code': "select ifnull(memo,'') from code_name where cid=?",
-            'category': "select ifnull(memo,'') from code_cat where catid=?",
-            'code_text': "select ifnull(memo,'') from code_text where ctid=?",
-            'code_image': "select ifnull(memo,'') from code_image where imid=?",
-            'code_av': "select ifnull(memo,'') from code_av where avid=?",
-            'case': "select ifnull(memo,'') from cases where caseid=?",
-            'file': "select ifnull(memo,'') from source where id=?",
-        }
-        body = ""
-        sql = type_map.get(memo_source_type)
-        if sql:
-            try:
-                cur = self.app.conn.cursor()
-                cur.execute(sql, [memo_source_id])
-                res = cur.fetchone()
-                body = res[0] if res else ""
-            except Exception:
-                body = ""
-        t = QtWidgets.QGraphicsTextItem()  # wrapping text like the real memo node
-        f = QtGui.QFont()
-        f.setPointSize(max(6, int(font_size or 9)))
-        t.setFont(f)
-        t.setDefaultTextColor(safe_color("blue"))
-        display = body[:120] + "\u2026" if len(body) > 120 else (body or _("Memo"))
-        t.setPlainText(display)
-        t.setTextWidth(180)
-        br = t.boundingRect().adjusted(-4, -3, 4, 3)
-        path = QtGui.QPainterPath()
-        path.addRoundedRect(br, 6, 6)
-        shape = QtWidgets.QGraphicsPathItem(path)
-        shape.setBrush(QtGui.QBrush(QtGui.QColor("#E3F2FD")))
-        pen = QtGui.QPen(QtGui.QColor("#1565C0"), 1)
-        pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-        shape.setPen(pen)
-        shape.setPos(x, y)
-        t.setParentItem(shape)
-        shape.setZValue(1)
-        self.preview_scene.addItem(shape)
-        return shape.sceneBoundingRect()
-
-    def _preview_pixmap(self, x, y, px, py, w, h, filepath, pdf_page):
-        """ PixmapGraphicsItem look: the actual image, cropped and fitted to 200px
-        like the real item, with extra pixels so zooming stays sharp. Falls back to a gray placeholder. """
-        base_side = PixmapGraphicsItem.BASE_SIDE
-        image = load_coded_image_area(self.app.project_path, filepath, px, py, w, h, pdf_page,
-                                      pdf_zoom=PixmapGraphicsItem.PDF_RENDER_ZOOM,
-                                      max_side=base_side * PixmapGraphicsItem.OVERSAMPLE)
-        if image.isNull() or image.width() <= 0 or image.height() <= 0:
-            rect = QtWidgets.QGraphicsRectItem(0, 0, max(30, (w or 90) / 3), max(20, (h or 60) / 3))
-            rect.setBrush(QtGui.QBrush(QtGui.QColor("#E8E8E8")))
-            rect.setPen(QtGui.QPen(QtGui.QColor("#909090"), 0.5))
-            rect.setPos(x, y)
-            rect.setZValue(1)
-            self.preview_scene.addItem(rect)
-            return rect.sceneBoundingRect()
-        # On-canvas size in graph units, same rule as the real node
-        area_w = float(w or image.width())
-        area_h = float(h or image.height())
-        scaler = min(1.0, base_side / area_w, base_side / area_h)
-        logical_w = max(1.0, area_w * scaler)
-        target_w = max(1, int(round(min(image.width(), logical_w * PixmapGraphicsItem.OVERSAMPLE))))
-        target_h = max(1, int(round(target_w * image.height() / image.width())))
-        if target_w != image.width():
-            image = image.scaled(target_w, target_h, QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
-                                 QtCore.Qt.TransformationMode.SmoothTransformation)
-        item = _PreviewPixmapItem(image, logical_w, logical_w * image.height() / image.width())
-        item.setPos(x, y)
-        item.setZValue(1)
-        self.preview_scene.addItem(item)
-        return item.sceneBoundingRect()
-
-    def _preview_av(self, x, y, color):
-        """ AVGraphicsItem look: colored chip with a play marker. """
-        t = self._preview_text("\u25B6 A/V", 9, False, "#000000")
-        br = t.boundingRect().adjusted(-4, -2, 4, 2)
-        rect = QtWidgets.QGraphicsRectItem(br)
-        try:
-            rect.setBrush(QtGui.QBrush(QtGui.QColor(color if (color or "").startswith("#") else "#FFFFFF")))
-        except Exception:
-            rect.setBrush(QtGui.QBrush(QtGui.QColor("#FFFFFF")))
-        rect.setPen(QtGui.QPen(QtGui.QColor("#909090"), 0.5))
-        rect.setPos(x, y)
-        t.setParentItem(rect)
-        rect.setZValue(1)
-        self.preview_scene.addItem(rect)
-        return rect.sceneBoundingRect()
-
-    @staticmethod
-    def _trim_to_rect(p_from, rect_to):
-        """ Move the endpoint from a node center to that node's border, like the
-        real perimeter-intersection line drawing. """
-        center = rect_to.center()
-        dx = center.x() - p_from.x()
-        dy = center.y() - p_from.y()
-        if dx == 0 and dy == 0:
-            return center
-        # parametric intersection of segment (p_from -> center) with rect borders
-        candidates = []
-        if dx != 0:
-            for edge_x in (rect_to.left(), rect_to.right()):
-                t = (edge_x - p_from.x()) / dx
-                if 0 < t <= 1:
-                    y = p_from.y() + t * dy
-                    if rect_to.top() - 0.5 <= y <= rect_to.bottom() + 0.5:
-                        candidates.append(t)
-        if dy != 0:
-            for edge_y in (rect_to.top(), rect_to.bottom()):
-                t = (edge_y - p_from.y()) / dy
-                if 0 < t <= 1:
-                    x = p_from.x() + t * dx
-                    if rect_to.left() - 0.5 <= x <= rect_to.right() + 0.5:
-                        candidates.append(t)
-        if not candidates:
-            return center
-        t = min(candidates)
-        return QtCore.QPointF(p_from.x() + t * dx, p_from.y() + t * dy)
-
-    def _preview_line(self, rect1, rect2, color_name, line_width=2,
-                      dotted=False, arrow_mode="none", label=""):
-        if rect1 is None or rect2 is None:
-            return
-        c1, c2 = rect1.center(), rect2.center()
-        p1 = self._trim_to_rect(c2, rect1)
-        p2 = self._trim_to_rect(c1, rect2)
-        color_obj = safe_color(color_name or "gray")
-        pen = QtGui.QPen(color_obj, max(1.0, float(line_width or 2)))
-        if dotted:
-            pen.setStyle(QtCore.Qt.PenStyle.DotLine)
-        line = QtWidgets.QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y())
-        line.setPen(pen)
-        line.setZValue(0)
-        self.preview_scene.addItem(line)
-        # arrowheads, same triangle geometry as the real lines (size 12)
-        theta = math.atan2(p1.y() - p2.y(), p1.x() - p2.x())
-        arrow_size = 12
-
-        def _arrow(tip, angle):
-            tri = QtGui.QPolygonF([
-                tip,
-                QtCore.QPointF(tip.x() + arrow_size * math.cos(angle + math.pi / 6),
-                               tip.y() + arrow_size * math.sin(angle + math.pi / 6)),
-                QtCore.QPointF(tip.x() + arrow_size * math.cos(angle - math.pi / 6),
-                               tip.y() + arrow_size * math.sin(angle - math.pi / 6))])
-            head = QtWidgets.QGraphicsPolygonItem(tri)
-            head.setBrush(QtGui.QBrush(color_obj))
-            head.setPen(QtGui.QPen(color_obj, 1))
-            head.setZValue(0)
-            self.preview_scene.addItem(head)
-
-        if arrow_mode in ("forward", "both"):
-            _arrow(p2, theta)
-        if arrow_mode in ("backward", "both"):
-            _arrow(p1, theta + math.pi)
-        if arrow_mode == "circle":
-            r = 4
-            dot = QtWidgets.QGraphicsEllipseItem(p2.x() - r, p2.y() - r, 2 * r, 2 * r)
-            dot.setBrush(QtGui.QBrush(color_obj))
-            dot.setPen(QtGui.QPen(color_obj, 1))
-            self.preview_scene.addItem(dot)
-        # relation label: italic blue text on a borderless white chip, like the graph
-        if label:
-            # Traducido al mostrar, igual que en el lienzo. Translated at display time, as on the canvas.
-            lt = QtWidgets.QGraphicsTextItem(_(str(label)))
-            f = QtGui.QFont()
-            f.setPointSize(9)
-            f.setItalic(True)
-            lt.setFont(f)
-            lt.setDefaultTextColor(QtGui.QColor("#0000CD"))
-            br = lt.boundingRect()
-            mid = QtCore.QPointF((p1.x() + p2.x()) / 2, (p1.y() + p2.y()) / 2)
-            lt.setPos(mid.x() - br.width() / 2, mid.y() - br.height() / 2)
-            lt.setZValue(3)
-            chip = QtWidgets.QGraphicsRectItem(br.adjusted(-4, -1, 4, 1), lt)
-            chip.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemStacksBehindParent, True)
-            chip.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 235)))
-            chip.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))
-            self.preview_scene.addItem(lt)
+    def _clear_preview(self):
+        self._line_widths = []
+        self.preview_scene.clear()
 
     def _render_preview(self, grid):
-        self.preview_scene.clear()
-        self.preview_scene.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#FFFFFF")))
-        cur = self.app.conn.cursor()
-        code_pos, cat_pos, case_pos, file_pos = {}, {}, {}, {}
-        free_pos, pix_pos, av_pos, memo_pos = {}, {}, {}, {}
+        """ Load the saved graph into the preview scene with the canvas item classes. """
+        self._clear_preview()
         try:
-            # codes and categories
-            cur.execute("select x, y, catid, cid, font_size, bold, isvisible, ifnull(displaytext,'') "
-                        "from gr_cdct_text_item where grid=?", [grid])
-            for x, y, catid, cid, fsize, bold, isvisible, displaytext in cur.fetchall():
-                if not isvisible or x is None or y is None:
-                    continue
-                if cid is not None:
-                    cur.execute("select name, color from code_name where cid=?", [cid])
-                    res = cur.fetchone()
-                    if res is None:
-                        continue
-                    rect = self._preview_code_or_cat(x, y, displaytext or res[0], res[1],
-                                                     fsize, bold, is_category=False)
-                    code_pos[cid] = rect
-                else:
-                    cur.execute("select name from code_cat where catid=?", [catid])
-                    res = cur.fetchone()
-                    if res is None:
-                        continue
-                    rect = self._preview_code_or_cat(x, y, displaytext or res[0], "#FFFFFF",
-                                                     fsize, bold, is_category=True)
-                    cat_pos[catid] = rect
-            # cases
-            cur.execute("select x, y, caseid, font_size, bold, ifnull(color,'black'), "
-                        "ifnull(displaytext,'') from gr_case_text_item where grid=?", [grid])
-            for x, y, caseid, fsize, bold, color, displaytext in cur.fetchall():
-                if x is None or y is None:
-                    continue
-                name = displaytext
-                if not name:
-                    cur.execute("select name from cases where caseid=?", [caseid])
-                    res = cur.fetchone()
-                    name = res[0] if res else "case"
-                case_pos[caseid] = self._preview_case(x, y, name, fsize, bold, color)
-            # files
-            cur.execute("select x, y, fid, font_size, bold, ifnull(color,'black'), "
-                        "ifnull(displaytext,'') from gr_file_text_item where grid=?", [grid])
-            for x, y, fid, fsize, bold, color, displaytext in cur.fetchall():
-                if x is None or y is None:
-                    continue
-                name = displaytext
-                if not name:
-                    cur.execute("select name from source where id=?", [fid])
-                    res = cur.fetchone()
-                    name = res[0] if res else "file"
-                file_pos[fid] = self._preview_file(x, y, name, fsize, bold, color)
-            # free text
-            cur.execute("select freetextid, x, y, ifnull(free_text,''), font_size, bold, "
-                        "ifnull(color,'black') from gr_free_text_item where grid=?", [grid])
-            for freetextid, x, y, free_text, fsize, bold, color in cur.fetchall():
-                if x is None or y is None:
-                    continue
-                free_pos[freetextid] = self._preview_free_text(x, y, free_text, fsize, bold, color)
-            # images and A/V
-            cur.execute("select imid, x, y, px, py, w, h, filepath, pdf_page "
-                        "from gr_pix_item where grid=?", [grid])
-            for imid, x, y, px, py, w, h, filepath, pdf_page in cur.fetchall():
-                if x is None or y is None:
-                    continue
-                pix_pos[imid] = self._preview_pixmap(x, y, px, py, w, h, filepath, pdf_page)
-            cur.execute("select avid, x, y, ifnull(color,'white') from gr_av_item where grid=?", [grid])
-            for avid, x, y, color in cur.fetchall():
-                if x is None or y is None:
-                    continue
-                av_pos[avid] = self._preview_av(x, y, color)
-            # memo nodes (v17)
-            try:
-                cur.execute("select gmemoid, memo_source_type, memo_source_id, x, y, "
-                            "ifnull(font_size,9) from gr_memo_item where grid=?", [grid])
-                for gmemoid, src_type, src_id, x, y, fsize in cur.fetchall():
-                    if x is None or y is None:
-                        continue
-                    memo_pos[gmemoid] = self._preview_memo(x, y, src_type, src_id, fsize)
-            except sqlite3.OperationalError:
-                pass  # pre-v17 project
-            # hierarchy lines (label + arrow_mode are v17 columns, tolerate their absence)
-            try:
-                cur.execute("select fromcatid, fromcid, tocatid, tocid, ifnull(color,'gray'), "
-                            "ifnull(linewidth,2), ifnull(linetype,'solid'), isvisible, "
-                            "ifnull(label,''), ifnull(arrow_mode,'none') "
-                            "from gr_cdct_line_item where grid=?", [grid])
-                cdct_lines = cur.fetchall()
-            except sqlite3.OperationalError:
-                cur.execute("select fromcatid, fromcid, tocatid, tocid, ifnull(color,'gray'), "
-                            "ifnull(linewidth,2), ifnull(linetype,'solid'), isvisible, "
-                            "'', 'none' from gr_cdct_line_item where grid=?", [grid])
-                cdct_lines = cur.fetchall()
-            for fromcatid, fromcid, tocatid, tocid, color, lw, linetype, isvisible, label, arrow in cdct_lines:
-                if not isvisible:
-                    continue
-                r1 = code_pos.get(fromcid) if fromcid is not None else cat_pos.get(fromcatid)
-                r2 = code_pos.get(tocid) if tocid is not None else cat_pos.get(tocatid)
-                self._preview_line(r1, r2, color, lw, linetype == "dotted", arrow, label)
-
-            def free_endpoint(freetextid, catid, cid, caseid, fid, imid, avid):
-                if freetextid is not None and freetextid >= _MEMO_LINE_ID_OFFSET:
-                    return memo_pos.get(freetextid - _MEMO_LINE_ID_OFFSET)
-                for value, positions in ((freetextid, free_pos), (cid, code_pos),
-                                         (catid, cat_pos), (caseid, case_pos),
-                                         (fid, file_pos), (imid, pix_pos), (avid, av_pos)):
-                    if value is not None and value in positions:
-                        return positions[value]
-                return None
-
-            # relation / free lines
-            try:
-                cur.execute("select fromfreetextid, fromcatid, fromcid, fromcaseid, fromfileid, "
-                            "fromimid, fromavid, tofreetextid, tocatid, tocid, tocaseid, tofileid, "
-                            "toimid, toavid, ifnull(color,'gray'), ifnull(linewidth,2), "
-                            "ifnull(linetype,'solid'), ifnull(label,''), ifnull(arrow_mode,'forward') "
-                            "from gr_free_line_item where grid=?", [grid])
-                free_lines = cur.fetchall()
-            except sqlite3.OperationalError:
-                cur.execute("select fromfreetextid, fromcatid, fromcid, fromcaseid, fromfileid, "
-                            "fromimid, fromavid, tofreetextid, tocatid, tocid, tocaseid, tofileid, "
-                            "toimid, toavid, ifnull(color,'gray'), ifnull(linewidth,2), "
-                            "ifnull(linetype,'solid'), '', 'forward' "
-                            "from gr_free_line_item where grid=?", [grid])
-                free_lines = cur.fetchall()
-            for r in free_lines:
-                r1 = free_endpoint(r[0], r[1], r[2], r[3], r[4], r[5], r[6])
-                r2 = free_endpoint(r[7], r[8], r[9], r[10], r[11], r[12], r[13])
-                self._preview_line(r1, r2, r[14], r[15], r[16] == "dotted", r[18], r[17])
+            _GraphPreviewLoader(self.app, self.preview_scene).load(grid)
         except Exception as err:
             logger.warning("Graph preview failed for grid %s: %s", grid, err)
-        rect = self.preview_scene.itemsBoundingRect().adjusted(-20, -20, 20, 20)
+        for item in self.preview_scene.items():
+            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
+                try:
+                    self._line_widths.append((item, item.pen().widthF()))
+                except (AttributeError, RuntimeError):
+                    pass
+        rect = self.preview_scene.itemsBoundingRect()
         if rect.isValid():
-            self.preview_scene.setSceneRect(rect)
-            self._fit_preview()
+            self.preview_scene.setSceneRect(rect.adjusted(-self.PREVIEW_MARGIN, -self.PREVIEW_MARGIN,
+                                                          self.PREVIEW_MARGIN, self.PREVIEW_MARGIN))
+        self._fit_preview()
+
+    def _fit_preview(self):
+        """ Show the whole graph, keeping proportions, without enlarging small graphs. """
+        view = self.ui.graphicsView_preview
+        rect = self.preview_scene.sceneRect()
+        if not rect.isValid() or rect.width() <= 0 or rect.height() <= 0:
+            return
+        viewport = view.viewport().rect()
+        if viewport.width() <= 2 or viewport.height() <= 2:
+            return
+        scale = min((viewport.width() - 2) / rect.width(), (viewport.height() - 2) / rect.height())
+        scale = max(0.01, min(scale, self.PREVIEW_MAX_SCALE))
+        view.resetTransform()
+        view.scale(scale, scale)
+        view.centerOn(rect.center())
+        self._keep_lines_visible(scale)
+
+    def _keep_lines_visible(self, scale):
+        """ Same proportions as the canvas, but never thinner than one screen pixel. """
+        for line, width in self._line_widths:
+            try:
+                pen = line.pen()
+                pen.setWidthF(max(width, 1.0 / scale))
+                line.setPen(pen)
+            except RuntimeError:
+                pass
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -8706,7 +8327,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if self.bold:
             fontweight = QtGui.QFont.Weight.Bold
         self.setFont(QtGui.QFont(self.settings['font'], self.font_size, fontweight))
-        self.setPlainText(self.code_or_cat['name'])
+        self.setPlainText(self.text)  # saved display text, falling back to the code name
         if not isvisible:
             self.hide()
         self.code_or_cat['memo'] = ""
