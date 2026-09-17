@@ -804,44 +804,11 @@ class GraphSynchronizer:
             item.code_or_cat = {'cid': None, 'catid': None}
         item.code_or_cat['cid'] = res[3]
         if item.px != res[4] or item.py != res[5] or item.pwidth != res[6] or item.pheight != res[7]:
-            old_width = item.boundingRect().width()
+            old_width = item.display_width()
             item.px, item.py, item.pwidth, item.pheight = res[4], res[5], res[6], res[7]
             try:
-                abs_path_ = item.app.project_path + item.path_
-                if item.path_[0:7] == "images:":
-                    abs_path_ = item.path_[7:]
-                if item.pdf_page is not None:
-                    source_path = ""
-                    if item.path_[:6] == "/docs/":
-                        source_path = f"{item.app.project_path}/documents/{item.path_[6:]}"
-                    elif item.path_[:5] == "docs:":
-                        source_path = item.path_[5:]
-                    if Path(source_path).exists():
-                        pymu_pdf = pymupdf.open(source_path)
-                        page = pymu_pdf[item.pdf_page]
-                        pixmap_pdf = page.get_pixmap(annots=False)  # PDF highlights/notes not painted
-                        abs_path_ = Path(item.app.confighome) / "tmp_pdf_page.png"
-                        pixmap_pdf.save(str(abs_path_))  # Presume method requires String
-                        pymu_pdf.close()
-                if Path(abs_path_).exists():
-                    image = QtGui.QImageReader(abs_path_).read()
-                    image = image.copy(int(item.px), int(item.py), int(item.pwidth), int(item.pheight))
-                    scaler_w = 200 / image.width() if image.width() > 200 else 1.0
-                    scaler_h = 200 / image.height() if image.height() > 200 else 1.0
-                    scaler = min(scaler_w, scaler_h)
-                    pixmap = QtGui.QPixmap().fromImage(image)
-                    pixmap = pixmap.scaled(int(image.width() * scaler), int(image.height() * scaler))
-                    item.setPixmap(pixmap)
-                    item._original_pixmap = item.pixmap()
-                    if old_width > 0 and old_width != item.boundingRect().width():
-                        scale_factor = old_width / item._original_pixmap.width()
-                        scaled = item._original_pixmap.scaled(
-                            int(item._original_pixmap.width() * scale_factor),
-                            int(item._original_pixmap.height() * scale_factor),
-                            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                            QtCore.Qt.TransformationMode.SmoothTransformation)
-                        item.setPixmap(scaled)
-                    item.update()
+                item.reload_image()
+                item.set_display_width(old_width if old_width > 0 else item.base_display_width())
             except Exception as e:
                 logger.error(f"Error regenerating pixmap in GraphSynchronizer: {e}")
         return True
@@ -933,6 +900,11 @@ class GraphSynchronizer:
                 tw = line.to_widget
                 if isinstance(fw, TextGraphicsItem) and isinstance(tw, TextGraphicsItem):
                     if getattr(line, 'label', '') != '':
+                        continue
+                    # Co-occurrence and restyled links are user content, not hierarchy
+                    if getattr(line, '_is_cooc_line', False):
+                        continue
+                    if line.line_type != QtCore.Qt.PenStyle.SolidLine or line.color != "gray":
                         continue
                     if not (is_parent_child(fw, tw) or is_parent_child(tw, fw)):
                         self.vg.scene.removeItem(line)
@@ -1586,8 +1558,9 @@ class ViewGraph(QDialog):
                 if cls_name in ("PixmapGraphicsItem", "AVGraphicsItem"):
                     try:
                         if hasattr(item, 'pixmap') and item.pixmap() is not None:
-                            pm = item.pixmap()
-                            node_data['pixmap_size'] = (pm.width(), pm.height())
+                            # Logical size, independent of the device pixel ratio
+                            size = item.pixmap().deviceIndependentSize()
+                            node_data['pixmap_size'] = (size.width(), size.height())
                     except Exception:
                         pass
                 snapshot['nodes'].append(node_data)
@@ -1711,7 +1684,9 @@ class ViewGraph(QDialog):
                     try:
                         target_w, target_h = node_data['pixmap_size']
                         orig = item._original_pixmap
-                        if orig is not None and orig.width() > 0:
+                        if hasattr(item, 'set_display_width'):
+                            item.set_display_width(target_w)
+                        elif orig is not None and orig.width() > 0:
                             scaled = orig.scaled(int(target_w), int(target_h),
                                                  QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                                                  QtCore.Qt.TransformationMode.SmoothTransformation)
@@ -4048,6 +4023,7 @@ class ViewGraph(QDialog):
         image.fill(QtCore.Qt.GlobalColor.transparent)
         painter = QtGui.QPainter(image)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
         self.scene.render(painter, QtCore.QRectF(image.rect()), rect)
         painter.end()
         image.save(filepath)
@@ -4234,6 +4210,7 @@ class ViewGraph(QDialog):
         pdf_writer.setPageSize(page_size)
         painter = QtGui.QPainter(pdf_writer)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
         self.scene.render(
             painter,
             QtCore.QRectF(0, 0, bounding_rect.width(), bounding_rect.height()),
@@ -4262,7 +4239,7 @@ class ViewGraph(QDialog):
         if not filename.endswith('.odt'):
             filename += '.odt'
         if hasattr(self.app, 'last_export_directory'):
-            self.app.last_export_directory = Path(filename).parent
+            self.app.last_export_directory = str(Path(filename).parent)
 
         # 2. Build the ODT document and register named styles
         doc = OpenDocumentText()
@@ -4344,6 +4321,7 @@ class ViewGraph(QDialog):
                 pixmap.fill(QtCore.Qt.GlobalColor.white)
                 painter = QtGui.QPainter(pixmap)
                 painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
                 self.scene.render(painter, QtCore.QRectF(pixmap.rect()), rect)
                 painter.end()
                 temp_img = Path(tempfile.gettempdir()) / f"qc_graph_{uuid.uuid4().hex}.png"
@@ -6571,8 +6549,9 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
                 if cls_name in ("PixmapGraphicsItem", "AVGraphicsItem"):
                     try:
                         if hasattr(item, 'pixmap') and item.pixmap() is not None:
-                            pm = item.pixmap()
-                            node_data['pixmap_size'] = (pm.width(), pm.height())
+                            # Logical size, independent of the device pixel ratio
+                            size = item.pixmap().deviceIndependentSize()
+                            node_data['pixmap_size'] = (size.width(), size.height())
                     except Exception:
                         pass
                 snapshot['nodes'].append(node_data)
@@ -6806,6 +6785,8 @@ class ResizeHandleItem(QtWidgets.QGraphicsRectItem):
             if hasattr(self.parent_item, 'textWidth'):
                 tw = self.parent_item.textWidth()
                 self._drag_start_width = tw if tw > 0 else self.parent_item.boundingRect().width()
+            elif hasattr(self.parent_item, 'display_width'):
+                self._drag_start_width = self.parent_item.display_width()
             elif hasattr(self.parent_item, 'pixmap'):
                 self._drag_start_width = self.parent_item.boundingRect().width()
             # capture the pre-resize state; pushed on release only if changed
@@ -6825,6 +6806,9 @@ class ResizeHandleItem(QtWidgets.QGraphicsRectItem):
         new_width = max(60, min(600, self._drag_start_width + delta_x))
         if hasattr(self.parent_item, 'setTextWidth'):
             self.parent_item.setTextWidth(new_width)
+            self._reposition()
+        elif hasattr(self.parent_item, 'set_display_width'):
+            self.parent_item.set_display_width(new_width)
             self._reposition()
         elif hasattr(self.parent_item, 'pixmap') and hasattr(self.parent_item, '_original_pixmap'):
             orig_pixmap = self.parent_item._original_pixmap
@@ -6851,6 +6835,8 @@ class ResizeHandleItem(QtWidgets.QGraphicsRectItem):
                 if hasattr(self.parent_item, 'textWidth'):
                     tw = self.parent_item.textWidth()
                     current_w = tw if tw > 0 else self.parent_item.boundingRect().width()
+                elif hasattr(self.parent_item, 'display_width'):
+                    current_w = self.parent_item.display_width()
                 else:
                     current_w = self.parent_item.boundingRect().width()
                 if abs(current_w - self._drag_start_width) > 1:
@@ -8337,6 +8323,10 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
 
     MAX_WIDTH = 300
     MAX_HEIGHT = 300
+    BASE_SIDE = 200
+    PDF_RENDER_ZOOM = 3
+    HIRES_MAX_SIDE = 2000
+    OVERSAMPLE = 3.0
 
     def __init__(self, app, imid=-1, x=10, y=10, px=0, py=0, pwidth=0, pheight=0, path_="", grpixid=None,
                  pdf_page=None):
@@ -8374,53 +8364,12 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
         self.grpixid = grpixid  # gr_pix_item table id. id for database stored free pixmap graph ite
         self.pdf_page = pdf_page
 
-        # Image jpg, png
-        abs_path_ = self.app.project_path + path_
-        if path_[0:7] == "images:":
-            abs_path_ = path_[7:]
-
-        # Pdf image
-        if self.pdf_page is not None:
-            source_path = ""
-            if path_[:6] == "/docs/":
-                source_path = f"{self.app.project_path}/documents/{path_[6:]}"
-            if path_[:5] == "docs:":
-                source_path = path_[5:]
-            # In-memory render, range-guarded, document always closed (the old
-            # code crashed on out-of-range pages and leaked the handle/temp file).
-            image = QtGui.QImage()
-            try:
-                pymu_pdf = pymupdf.open(source_path)
-                try:
-                    if 0 <= self.pdf_page < len(pymu_pdf):
-                        page = pymu_pdf.load_page(self.pdf_page)
-                        pix = page.get_pixmap(alpha=False, annots=False)  # PDF highlights/notes not painted
-                        image = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride,
-                                             QtGui.QImage.Format.Format_RGB888).copy()
-                finally:
-                    pymu_pdf.close()
-            except Exception as err:
-                logger.warning(f"Graph pdf area: {source_path} {err}")
-        else:
-            image = QtGui.QImageReader(abs_path_).read()
-        image = image.copy(int(px), int(py), int(pwidth), int(pheight))
-
-        # Scale to max 200 wide or high. (TODO Perhaps add option to change maximum limits)
-        scaler_w = 1.0
-        scaler_h = 1.0
-        if image.width() > 200:
-            scaler_w = 200 / image.width()
-        if image.height() > 200:
-            scaler_h = 200 / image.height()
-        if scaler_w < scaler_h:
-            scaler = scaler_w
-        else:
-            scaler = scaler_h
-        pixmap = QtGui.QPixmap().fromImage(image)
-        pixmap = pixmap.scaled(int(image.width() * scaler), int(image.height() * scaler))
-        self.setPixmap(pixmap)
-        # keep the base pixmap so _scale_graph can resize without quality loss
-        self._original_pixmap = pixmap
+        # Keep a high-resolution crop and show it downsampled, so zoom and resize stay sharp
+        self.setTransformationMode(QtCore.Qt.TransformationMode.SmoothTransformation)
+        self._hires_pixmap = QtGui.QPixmap()
+        self._original_pixmap = None
+        self.reload_image()
+        self.set_display_width(self.base_display_width())
         self.setPos(x, y)
         self.settings = app.settings
         self.project_path = app.project_path
@@ -8428,6 +8377,91 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
         self.setFlags(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
                       QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsFocusable |
                       QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+
+    def _load_segment_image(self):
+        """ Return the coded area as a full resolution QImage. """
+        if self.pdf_page is not None:
+            source_path = ""
+            if self.path_[:6] == "/docs/":
+                source_path = f"{self.app.project_path}/documents/{self.path_[6:]}"
+            if self.path_[:5] == "docs:":
+                source_path = self.path_[5:]
+            image = QtGui.QImage()
+            zoom = self.PDF_RENDER_ZOOM
+            try:
+                pymu_pdf = pymupdf.open(source_path)
+                try:
+                    if 0 <= self.pdf_page < len(pymu_pdf):
+                        page = pymu_pdf.load_page(self.pdf_page)
+                        # Stored coordinates are at 72 dpi, render larger and scale the crop
+                        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False, annots=False)
+                        image = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride,
+                                             QtGui.QImage.Format.Format_RGB888).copy()
+                finally:
+                    pymu_pdf.close()
+            except Exception as err:
+                logger.warning(f"Graph pdf area: {source_path} {err}")
+            if image.isNull():
+                return image
+            return image.copy(int(self.px * zoom), int(self.py * zoom),
+                              int(self.pwidth * zoom), int(self.pheight * zoom))
+        abs_path_ = self.app.project_path + self.path_
+        if self.path_[0:7] == "images:":
+            abs_path_ = self.path_[7:]
+        image = QtGui.QImageReader(abs_path_).read()
+        if image.isNull():
+            return image
+        return image.copy(int(self.px), int(self.py), int(self.pwidth), int(self.pheight))
+
+    def reload_image(self):
+        """ Rebuild the high-resolution pixmap from the source file. """
+        image = self._load_segment_image()
+        if image.isNull() or image.width() <= 0 or image.height() <= 0:
+            self._hires_pixmap = QtGui.QPixmap()
+            self._original_pixmap = self._hires_pixmap
+            return
+        longest = max(image.width(), image.height())
+        if longest > self.HIRES_MAX_SIDE:
+            image = image.scaled(self.HIRES_MAX_SIDE, self.HIRES_MAX_SIDE,
+                                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                                 QtCore.Qt.TransformationMode.SmoothTransformation)
+        self._hires_pixmap = QtGui.QPixmap.fromImage(image)
+        # Kept for code that only checks the attribute exists
+        self._original_pixmap = self._hires_pixmap
+
+    def display_width(self):
+        """ Current on-canvas width, without the smooth-mode bounding margin. """
+        return self.pixmap().deviceIndependentSize().width()
+
+    def base_display_width(self):
+        """ Default on-canvas width, fitting the segment inside BASE_SIDE. """
+        if self.pwidth <= 0 or self.pheight <= 0:
+            return self.BASE_SIDE
+        scaler = min(1.0, self.BASE_SIDE / self.pwidth, self.BASE_SIDE / self.pheight)
+        return max(1.0, self.pwidth * scaler)
+
+    def set_display_width(self, width):
+        """ Show the segment at a logical width using extra pixels for sharpness. """
+        hires = self._hires_pixmap
+        if hires.isNull() or hires.width() <= 0 or width <= 0:
+            self.setPixmap(hires)
+            return
+        width = float(width)
+        height = width * hires.height() / hires.width()
+        target_w = int(round(min(hires.width(), width * self.OVERSAMPLE)))
+        target_h = int(round(target_w * hires.height() / hires.width()))
+        if target_w < 1 or target_h < 1:
+            return
+        if target_w == hires.width():
+            pixmap = QtGui.QPixmap(hires)
+        else:
+            pixmap = hires.scaled(target_w, target_h, QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                                  QtCore.Qt.TransformationMode.SmoothTransformation)
+        # Device pixel ratio keeps the on-canvas size at width x height
+        pixmap.setDevicePixelRatio(pixmap.width() / width)
+        self.prepareGeometryChange()
+        self.setPixmap(pixmap)
+        self.update()
 
     def __repr__(self):
         txt = f"PixmapGraphicsItem imid:{self.imid} grpxid:{self.grpixid} Path:{self.path_}"
@@ -9129,6 +9163,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             if not line_exists:
                 line_item = LinkGraphicsItem(self, target_node, line_width=2, line_type="dotted", color="blue",
                                              isvisible=True)
+                line_item._is_cooc_line = True  # keep it when hierarchy lines are synced
                 self.scene().addItem(line_item)
 
     def add_edit_memo(self):
