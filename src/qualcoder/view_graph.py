@@ -4093,7 +4093,13 @@ class ViewGraph(QDialog):
                 if item_type == "PixmapGraphicsItem":
                     buffer = QtCore.QBuffer()
                     buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
-                    item.pixmap().toImage().save(buffer, "PNG")
+                    # Full resolution crop; Draw.io keeps the on-canvas size from the geometry
+                    source_pixmap = getattr(item, '_hires_pixmap', None)
+                    if source_pixmap is None or source_pixmap.isNull():
+                        source_pixmap = item.pixmap()
+                    image_out = source_pixmap.toImage()
+                    image_out.setDevicePixelRatio(1.0)
+                    image_out.save(buffer, "PNG")
                     b64_data = buffer.data().toBase64().data().decode('ascii').replace('\n', '').replace('\r', '')
                     style = f"shape=image;html=1;verticalLabelPosition=bottom;verticalAlign=top;imageAspect=0;aspect=fixed;image=data:image/png,{b64_data};"
                     if getattr(item, 'imid', -1) is not None and getattr(item, 'imid', -1) > 0:
@@ -4226,20 +4232,11 @@ class ViewGraph(QDialog):
         coding frequencies per code, and a software citation.
         """
 
-        # 1. Choose output path
-        default_dir = getattr(self.app, 'last_export_directory', str(Path('~').expanduser()))
-        filename, ok = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            _("Save graph analytical summary"),
-            default_dir,
-            "OpenDocument Text (*.odt)"
-        )
-        if not ok or not filename:
+        # 1. Choose output folder, same as the other graph exports (no overwrite, adds _0, _1...)
+        e_dir = ExportDirectoryPathDialog(self.app, "Graph_summary.odt")
+        filename = e_dir.filepath
+        if filename is None:
             return
-        if not filename.endswith('.odt'):
-            filename += '.odt'
-        if hasattr(self.app, 'last_export_directory'):
-            self.app.last_export_directory = str(Path(filename).parent)
 
         # 2. Build the ODT document and register named styles
         doc = OpenDocumentText()
@@ -4317,10 +4314,18 @@ class ViewGraph(QDialog):
         if rect.width() > 0 and rect.height() > 0:
             self._hide_all_handles()
             try:
-                pixmap = QtGui.QPixmap(int(rect.width() + 40), int(rect.height() + 40))
+                # Margin in scene units, so the render keeps the graph proportions
+                rect = rect.adjusted(-20, -20, 20, 20)
+                # Render for ~300 dpi at the 16 cm frame width, within a safe pixel budget
+                scale = max(1.0, min(6.0, 1890.0 / rect.width()))
+                max_side = 8000.0
+                scale = min(scale, max_side / rect.width(), max_side / rect.height())
+                scale = max(scale, 0.1)
+                pixmap = QtGui.QPixmap(max(1, int(rect.width() * scale)), max(1, int(rect.height() * scale)))
                 pixmap.fill(QtCore.Qt.GlobalColor.white)
                 painter = QtGui.QPainter(pixmap)
                 painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+                painter.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing)
                 painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
                 self.scene.render(painter, QtCore.QRectF(pixmap.rect()), rect)
                 painter.end()
