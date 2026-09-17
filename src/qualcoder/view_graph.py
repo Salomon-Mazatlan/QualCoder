@@ -807,8 +807,8 @@ class GraphSynchronizer:
             old_width = item.display_width()
             item.px, item.py, item.pwidth, item.pheight = res[4], res[5], res[6], res[7]
             try:
-                item.reload_image()
-                item.set_display_width(old_width if old_width > 0 else item.base_display_width())
+                if item.reload_image():
+                    item.set_display_width(old_width if old_width > 0 else item.base_display_width())
             except Exception as e:
                 logger.error(f"Error regenerating pixmap in GraphSynchronizer: {e}")
         return True
@@ -901,10 +901,10 @@ class GraphSynchronizer:
                 if isinstance(fw, TextGraphicsItem) and isinstance(tw, TextGraphicsItem):
                     if getattr(line, 'label', '') != '':
                         continue
-                    # Co-occurrence and restyled links are user content, not hierarchy
+                    # Co-occurrence links are not hierarchy; dotted blue identifies them after reload
                     if getattr(line, '_is_cooc_line', False):
                         continue
-                    if line.line_type != QtCore.Qt.PenStyle.SolidLine or line.color != "gray":
+                    if line.line_type == QtCore.Qt.PenStyle.DotLine and line.color == "blue":
                         continue
                     if not (is_parent_child(fw, tw) or is_parent_child(tw, fw)):
                         self.vg.scene.removeItem(line)
@@ -8387,24 +8387,25 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
             if self.path_[:5] == "docs:":
                 source_path = self.path_[5:]
             image = QtGui.QImage()
-            zoom = self.PDF_RENDER_ZOOM
+            # Enlarge small areas, but never render beyond the high-resolution cap
+            longest = max(float(self.pwidth), float(self.pheight), 1.0)
+            zoom = min(self.PDF_RENDER_ZOOM, self.HIRES_MAX_SIDE / longest)
             try:
                 pymu_pdf = pymupdf.open(source_path)
                 try:
                     if 0 <= self.pdf_page < len(pymu_pdf):
                         page = pymu_pdf.load_page(self.pdf_page)
-                        # Stored coordinates are at 72 dpi, render larger and scale the crop
-                        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False, annots=False)
+                        # Coordinates are 72 dpi on the displayed page; render only that area, enlarged
+                        clip = pymupdf.Rect(self.px, self.py, self.px + self.pwidth, self.py + self.pheight)
+                        pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip,
+                                              alpha=False, annots=False)
                         image = QtGui.QImage(pix.samples, pix.width, pix.height, pix.stride,
                                              QtGui.QImage.Format.Format_RGB888).copy()
                 finally:
                     pymu_pdf.close()
             except Exception as err:
                 logger.warning(f"Graph pdf area: {source_path} {err}")
-            if image.isNull():
-                return image
-            return image.copy(int(self.px * zoom), int(self.py * zoom),
-                              int(self.pwidth * zoom), int(self.pheight * zoom))
+            return image
         abs_path_ = self.app.project_path + self.path_
         if self.path_[0:7] == "images:":
             abs_path_ = self.path_[7:]
@@ -8414,12 +8415,12 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
         return image.copy(int(self.px), int(self.py), int(self.pwidth), int(self.pheight))
 
     def reload_image(self):
-        """ Rebuild the high-resolution pixmap from the source file. """
+        """ Rebuild the high-resolution pixmap from the source file. Returns True on success. """
         image = self._load_segment_image()
         if image.isNull() or image.width() <= 0 or image.height() <= 0:
-            self._hires_pixmap = QtGui.QPixmap()
+            # Keep the previous picture if the source cannot be read now
             self._original_pixmap = self._hires_pixmap
-            return
+            return False
         longest = max(image.width(), image.height())
         if longest > self.HIRES_MAX_SIDE:
             image = image.scaled(self.HIRES_MAX_SIDE, self.HIRES_MAX_SIDE,
@@ -8428,6 +8429,7 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
         self._hires_pixmap = QtGui.QPixmap.fromImage(image)
         # Kept for code that only checks the attribute exists
         self._original_pixmap = self._hires_pixmap
+        return True
 
     def display_width(self):
         """ Current on-canvas width, without the smooth-mode bounding margin. """
@@ -8443,11 +8445,12 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
     def set_display_width(self, width):
         """ Show the segment at a logical width using extra pixels for sharpness. """
         hires = self._hires_pixmap
-        if hires.isNull() or hires.width() <= 0 or width <= 0:
+        if hires.isNull() or hires.width() <= 0:
             self.setPixmap(hires)
             return
+        if width is None or width <= 0:
+            width = self.base_display_width()
         width = float(width)
-        height = width * hires.height() / hires.width()
         target_w = int(round(min(hires.width(), width * self.OVERSAMPLE)))
         target_h = int(round(target_w * hires.height() / hires.width()))
         if target_w < 1 or target_h < 1:
