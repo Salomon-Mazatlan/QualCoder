@@ -976,7 +976,8 @@ class App(object):
                 'ai_permissions', 'ai_extended_logging', 'ai_model_upgrade_offers_seen',
                 'ai_model_upgrade_offer_pending',
                 'mcp_external_enabled', 'external_mcp_notice_acknowledged', 'mcp_external_port',
-                'ai_chat_sidebar_width', 'ai_chat_splitter_output_bottom'
+                'ai_chat_sidebar_width', 'ai_chat_splitter_output_bottom',
+                'remote_location_warning_ignored'
                 ]
         for key in keys:
             if key not in settings_data:
@@ -1020,6 +1021,8 @@ class App(object):
                     settings_data[key] = 'False'
                 if key == 'external_mcp_notice_acknowledged':
                     settings_data[key] = 'False'
+                if key == 'remote_location_warning_ignored':
+                    settings_data[key] = '[]'
                 if key == 'mcp_external_port':
                     settings_data[key] = 47363
                 if key == 'ai_chat_sidebar':
@@ -1457,6 +1460,7 @@ class App(object):
             'ai_model_upgrade_offer_pending': '',
             'mcp_external_enabled': 'False',
             'external_mcp_notice_acknowledged': 'False',
+            'remote_location_warning_ignored': '[]',
             'mcp_external_port': 47363,
             'ai_chat_sidebar': 'False',
             'ai_chat_sidebar_width': 320,
