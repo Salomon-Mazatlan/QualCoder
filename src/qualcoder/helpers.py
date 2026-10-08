@@ -41,9 +41,12 @@ import datetime
 import pymupdf
 from io import BytesIO
 import logging
+import os
 from pathlib import Path
 from PIL import Image, ImageOps, ImageFilter
 import platform
+import subprocess
+import sys
 
 from PyQt6 import QtCore, QtGui, QtWidgets, sip  # sip: detect deleted C++ objects in deferred callbacks
 
@@ -61,6 +64,111 @@ except Exception as e:
 
 
 logger = logging.getLogger(__name__)
+
+# Folder names used by common cloud sync clients
+CLOUD_FOLDER_NAMES = ("OneDrive", "OneDrive - Personal", "Dropbox", "Google Drive", "GoogleDrive",
+                      "My Drive", "iCloud Drive", "Mobile Documents", "CloudStorage", "Nextcloud",
+                      "ownCloud", "MEGA", "MEGAsync", "Box", "pCloud", "Proton Drive")
+# File system types of network mounts (prefix match)
+NETWORK_FS_PREFIXES = ("nfs", "cifs", "smb", "afp", "9p", "davfs", "webdav", "sshfs", "ncpfs", "ceph", "glusterfs")
+# FUSE subtypes that back remote or cloud storage; other FUSE mounts (ntfs, portal, snap) are local
+REMOTE_FUSE_SUBTYPES = ("sshfs", "rclone", "gvfsd-fuse", "google-drive-ocamlfuse", "onedriver", "s3fs",
+                        "gcsfuse", "davfs2", "cryfs", "mergerfs", "curlftpfs", "ftpfs", "jmtpfs")
+# Windows attributes of cloud files on demand
+_WIN_CLOUD_ATTRIBUTES = 0x1000 | 0x40000 | 0x400000  # OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS
+
+
+def _read_mounts():
+    """Return a list of (mount_point, fs_type) tuples for the current system."""
+
+    mounts = []
+    if sys.platform.startswith("linux"):
+        with open("/proc/mounts", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 3:
+                    mounts.append((parts[1].replace("\\040", " "), parts[2]))
+    elif sys.platform == "darwin":
+        out = subprocess.run(["mount"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            # Format: device on /mount/point (fstype, options)
+            if " on " not in line or " (" not in line:
+                continue
+            mount_point = line.split(" on ", 1)[1].rsplit(" (", 1)[0]
+            fs_type = line.rsplit(" (", 1)[1].split(",", 1)[0].strip(") ")
+            mounts.append((mount_point, fs_type))
+    return mounts
+
+
+def _mount_fs_type(path, mounts=None):
+    """Return the file system type of the deepest mount holding path, or '' if unknown."""
+
+    if mounts is None:
+        try:
+            mounts = _read_mounts()
+        except Exception as err:
+            logger.debug(f"Cannot read mounts: {err}")
+            return ""
+    best = ""
+    best_type = ""
+    for mount_point, fs_type in mounts:
+        if path == mount_point or path.startswith(mount_point.rstrip("/") + "/"):
+            if len(mount_point) > len(best):
+                best, best_type = mount_point, fs_type
+    return best_type.lower()
+
+
+def _is_network_fs(fs_type):
+    """True if a mount file system type denotes network or cloud backed storage."""
+
+    if fs_type == "":
+        return False
+    if fs_type.startswith("fuse."):
+        return fs_type[5:] in REMOTE_FUSE_SUBTYPES
+    return fs_type.startswith(NETWORK_FS_PREFIXES)
+
+
+def remote_project_location(path):
+    """Return a short reason if path looks like a network or cloud synced location, else ''.
+    Heuristic, intended only to warn the user. Called by MainWindow.open_project.
+    """
+
+    try:
+        path = os.path.abspath(str(path))
+    except Exception:
+        return ""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            if path.startswith("\\\\"):
+                return _("network share")
+            drive = os.path.splitdrive(path)[0]
+            if drive and ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") == 4:  # DRIVE_REMOTE
+                return _("network drive")
+            if os.path.exists(path) and os.stat(path).st_file_attributes & _WIN_CLOUD_ATTRIBUTES:
+                return _("cloud synced folder")
+        except Exception as err:
+            logger.debug(f"Windows location check failed: {err}")
+        for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+            root = os.environ.get(var, "")
+            if root and path.lower().startswith(os.path.abspath(root).lower()):
+                return _("cloud synced folder") + " (OneDrive)"
+    elif sys.platform == "darwin":
+        library = os.path.join(os.path.expanduser("~"), "Library")
+        if path.startswith((os.path.join(library, "CloudStorage"), os.path.join(library, "Mobile Documents"))):
+            return _("cloud synced folder")
+        fs_type = _mount_fs_type(path)
+        if _is_network_fs(fs_type):
+            return _("network file system") + f" ({fs_type})"
+    else:
+        fs_type = _mount_fs_type(path)
+        if _is_network_fs(fs_type):
+            return _("network file system") + f" ({fs_type})"
+    parts = path.replace("\\", "/").split("/")
+    hit = next((p for p in parts if p in CLOUD_FOLDER_NAMES), "")
+    if hit:
+        return _("cloud synced folder") + f" ({hit})"
+    return ""
 
 
 def get_default_user_directory():
