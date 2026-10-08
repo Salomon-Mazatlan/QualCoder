@@ -85,7 +85,7 @@ from qualcoder.codebook import Codebook, ImportPlainTextCodes
 from qualcoder.GUI.base64_droidsansmono_helper import DroidSansMono
 from qualcoder.GUI.base64_notosans_helper import NotoSans
 from qualcoder.GUI.ui_main import Ui_MainWindow
-from qualcoder.helpers import get_default_user_directory, Message
+from qualcoder.helpers import get_default_user_directory, Message, remote_project_location
 from qualcoder.import_survey import DialogImportSurvey
 from qualcoder.information import DialogInformation, menu_shortcuts_display, coding_shortcuts_display
 from qualcoder.information import manage_tab_info, coding_tab_info, reports_tab_info, render_tab_info_markdown
@@ -2401,6 +2401,43 @@ Click "Yes" to start now.')
             self.ui.textEdit.append(_("Project memo entered."))
             self.app.delete_backup = False
 
+    def warn_remote_project_location(self) -> None:
+        """ Warn when the opened project sits on a network drive or a cloud synced folder.
+        SQLite does not lock reliably there and sync clients may corrupt data.qda.
+        The warning can be silenced per project (setting remote_location_warning_ignored). """
+
+        reason = remote_project_location(os.path.join(self.app.project_path, "data.qda"))
+        if reason == "":
+            return
+        logger.info(f"Project on remote location ({reason}): {self.app.project_path}")
+        self.ui.textEdit.append(_("Warning: project is located on a") + f" {reason}.")
+        try:
+            ignored = json.loads(self.app.settings.get('remote_location_warning_ignored', '[]') or '[]')
+        except (TypeError, ValueError):
+            ignored = []
+        if not isinstance(ignored, list):
+            ignored = []
+        if self.app.project_path in ignored:
+            return
+        msg = _("This project appears to be located on a {}.").format(reason) + "\n\n"
+        msg += _("QualCoder stores the project in a SQLite database. Network drives and cloud sync "
+                 "services (OneDrive, Dropbox, Google Drive, iCloud) do not handle database file locking "
+                 "reliably and may corrupt or lose your data.") + "\n\n"
+        msg += _("It is safer to keep the project in a local folder and copy the project or its "
+                 "backups to the shared location when you finish working.") + "\n\n"
+        msg += self.app.project_path
+        msg_box = Message(self.app, _("Project location warning"), msg, "warning")
+        checkbox = QtWidgets.QCheckBox(_("Do not warn me again for this project"))
+        msg_box.setCheckBox(checkbox)
+        msg_box.exec()
+        if checkbox.isChecked():
+            ignored.append(self.app.project_path)
+            self.app.settings['remote_location_warning_ignored'] = json.dumps(ignored)
+            try:
+                self.app.write_config_ini(self.app.settings, self.app.ai_models)
+            except Exception as err:
+                logger.warning(f"Cannot save remote location warning setting: {err}")
+
     def open_project(self, path_: str = "", newproject: str = "no") -> None:
         """ Open an existing project.
         if set, also save a backup datetime stamped copy at the same time.
@@ -2499,6 +2536,7 @@ Click "Yes" to start now.')
         self.app.append_recent_project(self.app.project_path)
         self.fill_recent_projects_menu_actions()
         self.setWindowTitle("QualCoder " + self.app.project_name)
+        self.warn_remote_project_location()
 
         # Check avid column in code_text table, Database version v2
         cur = self.app.conn.cursor()
