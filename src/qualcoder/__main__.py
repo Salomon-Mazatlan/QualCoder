@@ -82,13 +82,14 @@ from qualcoder.code_organiser import CodeOrganiser
 from qualcoder.code_text import DialogCodeText
 from qualcoder.code_pdf import DialogCodePdf
 from qualcoder.codebook import Codebook, ImportPlainTextCodes
+from qualcoder.coder_names import DialogCoderNames
 from qualcoder.GUI.base64_droidsansmono_helper import DroidSansMono
 from qualcoder.GUI.base64_notosans_helper import NotoSans
 from qualcoder.GUI.ui_main import Ui_MainWindow
 from qualcoder.helpers import get_default_user_directory, Message
 from qualcoder.import_survey import DialogImportSurvey
 from qualcoder.information import DialogInformation, menu_shortcuts_display, coding_shortcuts_display
-from qualcoder.information import manage_tab_info, coding_tab_info, reports_tab_info, render_tab_info_markdown
+from qualcoder.information import project_tab_info, manage_tab_info, coding_tab_info, reports_tab_info, render_tab_info_markdown
 from qualcoder.journals import DialogJournals
 from qualcoder.manage_files import DialogManageFiles
 from qualcoder.manage_links import DialogManageLinks
@@ -325,6 +326,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.last_non_ai_chat_tab = None
         self.project = {"databaseversion": "", "date": "", "memo": "", "about": ""}
         self.recent_projects = []  # a list of recent projects for the qmenu
+        self.project_cards = {}  # Clickable frames in the Project tab mapped to their handlers
+        self.project_panel_colors = {}
+        self.action_log_visible = True
 
         if platform.system() == "Windows" and self.app.settings['stylesheet'] == "native":
             # Make 'Fusion' the standard native style on Windows https://www.qt.io/blog/dark-mode-on-windows-11-with-qt-6.5
@@ -566,17 +570,20 @@ Click "Yes" to start now.')
         """Put the startup placeholder browsers into real tab layouts."""
 
         self.tab_placeholders = {
+            self.ui.tab_action_log: self.ui.textBrowser_project,
             self.ui.tab_manage: self.ui.textBrowser_manage,
             self.ui.tab_coding: self.ui.textBrowser_coding,
             self.ui.tab_reports: self.ui.textBrowser_reports,
         }
         for tab_widget, placeholder in self.tab_placeholders.items():
-            layout = tab_widget.layout()
-            if layout is None:
-                layout = QtWidgets.QVBoxLayout(tab_widget)
-                layout.setContentsMargins(9, 9, 9, 9)
-            if layout.indexOf(placeholder) == -1:
-                layout.addWidget(placeholder)
+            # The project placeholder already lives in the Project tab splitter.
+            if placeholder.parentWidget() is tab_widget:
+                layout = tab_widget.layout()
+                if layout is None:
+                    layout = QtWidgets.QVBoxLayout(tab_widget)
+                    layout.setContentsMargins(9, 9, 9, 9)
+                if layout.indexOf(placeholder) == -1:
+                    layout.addWidget(placeholder)
             placeholder.setOpenExternalLinks(False)
             placeholder.setOpenLinks(False)
             placeholder.anchorClicked.connect(self.handle_placeholder_link)
@@ -820,6 +827,7 @@ Click "Yes" to start now.')
                 f"a {{ color: {text_color}; }} "
                 f"a:visited {{ color: {text_color}; }}"
             )
+        self.update_project_panel_styles()
         self.refresh_placeholder_tab_content()
 
     def refresh_placeholder_tab_content(self):
@@ -839,6 +847,7 @@ Click "Yes" to start now.')
         doc_font_size = self.app.settings["docfontsize"]
         doc_font_family = self.app.settings.get("docfont", self.app.settings["font"])
         placeholder_map = {
+            self.ui.tab_action_log: (project_tab_info, "mdi6.folder-outline"),
             self.ui.tab_manage: (manage_tab_info, "mdi6.file-outline"),
             self.ui.tab_coding: (coding_tab_info, "mdi6.tag-text-outline"),
             self.ui.tab_reports: (reports_tab_info, "mdi6.format-list-group"),
@@ -859,6 +868,8 @@ Click "Yes" to start now.')
     def clear_tab_widgets(self, tab_widget, show_placeholder=True):
         """Remove loaded tab content and optionally show the placeholder browser."""
 
+        if tab_widget is self.ui.tab_action_log:
+            return  # The Project tab never hosts module widgets
         layout = tab_widget.layout()
         if layout is None:
             return
@@ -893,7 +904,7 @@ Click "Yes" to start now.')
         self.ui.actionClose_Project.setShortcut('Alt+X')
         self.ui.actionSettings.triggered.connect(self.change_settings)
         self.ui.actionSettings.setShortcut('Alt+S')
-        self.ui.actionProject_summary.triggered.connect(self.project_summary_report)
+        self.ui.actionProject_summary.triggered.connect(self.project_summary_requested)
         self.ui.actionProject_Exchange_Export.triggered.connect(self.refi_project_export)
         self.ui.actionREFI_Codebook_export.triggered.connect(self.refi_codebook_export)
         self.ui.actionREFI_Codebook_import.triggered.connect(self.refi_codebook_import)
@@ -999,7 +1010,7 @@ Click "Yes" to start now.')
 
         # Add tab widget icons
         try:
-            self.ui.tabWidget.setTabIcon(0, qta.icon('mdi6.cog', color=self.app.highlight_color()))  # Action Log
+            self.ui.tabWidget.setTabIcon(0, qta.icon('mdi6.folder-outline', color=self.app.highlight_color()))  # Project
             self.ui.tabWidget.setTabIcon(1, qta.icon('mdi6.file-outline', color=self.app.highlight_color()))  # Manage
             self.ui.tabWidget.setTabIcon(2, qta.icon('mdi6.tag-text-outline', color=self.app.highlight_color()))  # Coding
             self.ui.tabWidget.setTabIcon(3, qta.icon('mdi6.format-list-group', color=self.app.highlight_color()))  # Reports
@@ -1007,13 +1018,244 @@ Click "Yes" to start now.')
         except Exception as e_:
             logger.log(e_)
         self._setup_ai_chat_tab_sidebar_button()
+        self.init_project_panel()
         self.update_ai_menu_options()
-        
+
+    def init_project_panel(self):
+        """Wire the project cards, recent projects list and log toggle in the Project tab."""
+
+        self.project_cards = {
+            self.ui.frame_new_project: self.new_project,
+            self.ui.frame_open_project: self.open_project,
+        }
+        for card in self.project_cards:
+            card.installEventFilter(self)
+            for child in card.findChildren(QtWidgets.QWidget):
+                child.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                child.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        list_widget = self.ui.listWidget_recent_projects
+        list_widget.itemActivated.connect(self.open_recent_project_from_list)
+        list_widget.viewport().installEventFilter(self)
+        self.ui.pushButton_action_log.toggled.connect(self.set_action_log_visible)
+        self.ui.pushButton_settings.clicked.connect(self.change_settings)
+        self.ui.pushButton_project_memo.clicked.connect(self.project_memo)
+        self.ui.pushButton_coder.clicked.connect(self.edit_coder_names)
+        self.update_coder_display()
+        self.update_project_panel_styles()
+        visible = str(self.app.settings.get('action_log_visible', 'False')) == 'True'
+        self.set_action_log_visible(visible, persist=False)
+
+    def update_project_panel_styles(self):
+        """Match the project cards and recent list to the current theme and highlight colour."""
+
+        if not hasattr(self.ui, "frame_new_project"):
+            return
+        palette = self.ui.textEdit.viewport().palette()
+        base = palette.color(QtGui.QPalette.ColorRole.Base)
+        text = palette.color(QtGui.QPalette.ColorRole.Text)
+        highlight = QtGui.QColor(self.app.highlight_color())
+
+        def blend(first, second, ratio):
+            return QtGui.QColor(
+                round(first.red() * ratio + second.red() * (1 - ratio)),
+                round(first.green() * ratio + second.green() * (1 - ratio)),
+                round(first.blue() * ratio + second.blue() * (1 - ratio)),
+            )
+
+        border = blend(text, base, 0.25).name()
+        secondary = blend(text, base, 0.6).name()
+        self.project_panel_colors = {"text": text.name(), "secondary": secondary, "border": border}
+        # Scale the panel with the font so project names and dates still fit
+        metrics = QtGui.QFontMetrics(QtGui.QFont(self.app.settings['font'], int(self.app.settings['fontsize'])))
+        self.ui.frame_project_panel.setFixedWidth(max(340, metrics.horizontalAdvance("M") * 24))
+        card_icons = {
+            self.ui.frame_new_project: (self.ui.label_new_project_icon, "mdi6.folder-plus-outline"),
+            self.ui.frame_open_project: (self.ui.label_open_project_icon, "mdi6.folder-open-outline"),
+        }
+        for card, (icon_label, icon_name) in card_icons.items():
+            name = card.objectName()
+            card.setStyleSheet(
+                f"QFrame#{name} {{background-color: {base.name()}; border: 1px solid {border}; border-radius: 10px;}}"
+                f"QFrame#{name}:hover {{border: 1px solid {highlight.name()};}}"
+                f"QFrame#{name}:focus {{border: 2px solid {highlight.name()};}}"
+                f"QFrame#{name} QLabel {{background-color: transparent; border: none; color: {text.name()};}}"
+            )
+            try:
+                icon_label.setPixmap(qta.icon(icon_name, color=highlight.name()).pixmap(26, 26))
+            except Exception as err:
+                logger.debug(str(err))
+        for label in (self.ui.label_new_project_description, self.ui.label_open_project_description,
+                      self.ui.label_recent_projects_hint):
+            label.setStyleSheet(f"color: {secondary}; background-color: transparent; border: none;")
+        selection = f"rgba({highlight.red()}, {highlight.green()}, {highlight.blue()}, 45)"
+        hover = f"rgba({highlight.red()}, {highlight.green()}, {highlight.blue()}, 22)"
+        self.ui.listWidget_recent_projects.setStyleSheet(
+            f"QListWidget {{background-color: transparent; border: none; outline: none;}}"
+            f"QListWidget::item {{border-left: 3px solid transparent;}}"
+            f"QListWidget::item:hover {{background-color: {hover};}}"
+            f"QListWidget::item:selected {{background-color: {selection}; border-left: 3px solid {highlight.name()};}}"
+        )
+        try:
+            self.ui.pushButton_action_log.setIcon(qta.icon('mdi6.text-box-outline'))
+            self.ui.pushButton_settings.setIcon(qta.icon('mdi6.cog'))
+            self.ui.pushButton_project_memo.setIcon(qta.icon('mdi6.file-document-outline'))
+            self.ui.label_coder.setPixmap(qta.icon('mdi6.account').pixmap(26, 26))
+        except Exception as err:
+            logger.debug(str(err))
+        self.fill_recent_projects_list()
+
+    def update_coder_display(self):
+        """Show the current coder name in the Project tab."""
+
+        self.ui.lineEdit_coder.setText(self.app.settings['codername'])
+
+    def edit_coder_names(self):
+        """Change the coder name or coder visibility from the Project tab."""
+
+        current_coder = self.app.settings['codername']
+        ui_coder_names = DialogCoderNames(self.app, extended_options=False)
+        if (ui_coder_names.exec() != QtWidgets.QDialog.DialogCode.Accepted
+                or not ui_coder_names.coder_names_changed):
+            return
+        self.update_coder_display()
+        if current_coder != self.app.settings['codername']:
+            self.ui.textEdit.append(_("Coder name changed to: ") + self.app.settings['codername'])
+        # Open workspaces must reload with the new coder, as change_settings does
+        for tab_widget in (self.ui.tab_reports, self.ui.tab_coding, self.ui.tab_manage):
+            self.clear_tab_widgets(tab_widget, show_placeholder=True)
+
+    def fill_recent_projects_list(self):
+        """Show the recent projects as name, date and path rows in the Project tab."""
+
+        list_widget = getattr(self.ui, "listWidget_recent_projects", None)
+        if list_widget is None:
+            return
+        list_widget.clear()
+        colors = self.project_panel_colors
+        current_item = None
+        # Explicit fonts: the window stylesheet font is not applied yet when size hints are taken
+        row_font = QtGui.QFont(self.app.settings['font'], int(self.app.settings['fontsize']))
+        name_font = QtGui.QFont(row_font)
+        name_font.setBold(True)
+        for entry in self.recent_projects:
+            date_text, separator, project_path = entry.partition("|")
+            if not separator:  # Legacy lines only contain the path
+                date_text, project_path = "", entry
+            date_text = date_text.replace("_", " ")[:16]
+            item = QtWidgets.QListWidgetItem()
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, entry)
+            item.setToolTip(project_path)
+            row = QtWidgets.QWidget()
+            row.setStyleSheet("background-color: transparent;")
+            row_layout = QtWidgets.QVBoxLayout(row)
+            row_layout.setContentsMargins(8, 6, 8, 6)
+            row_layout.setSpacing(2)
+            top_row = QtWidgets.QHBoxLayout()
+            top_row.setSpacing(8)
+            name_label = QtWidgets.QLabel(Path(project_path).name)
+            name_label.setProperty("full_text", Path(project_path).name)
+            name_label.setProperty("elide_mode", int(QtCore.Qt.TextElideMode.ElideRight.value))
+            name_label.setFont(name_font)
+            name_label.setStyleSheet(f"color: {colors.get('text', '')}; font-weight: bold; border: none;")
+            date_label = QtWidgets.QLabel(date_text)
+            date_label.setFont(row_font)
+            date_label.setStyleSheet(f"color: {colors.get('secondary', '')}; border: none;")
+            top_row.addWidget(name_label, 1)
+            top_row.addWidget(date_label, 0)
+            path_label = QtWidgets.QLabel(project_path)
+            path_label.setProperty("full_text", project_path)
+            path_label.setProperty("elide_mode", int(QtCore.Qt.TextElideMode.ElideMiddle.value))
+            path_label.setFont(row_font)
+            path_label.setStyleSheet(f"color: {colors.get('secondary', '')}; border: none;")
+            row_layout.addLayout(top_row)
+            row_layout.addWidget(path_label)
+            item.setSizeHint(row.sizeHint())
+            list_widget.addItem(item)
+            list_widget.setItemWidget(item, row)
+            if project_path == self.app.project_path and self.app.project_path != "":
+                current_item = item
+        if current_item is not None:
+            list_widget.setCurrentItem(current_item)
+        self.elide_recent_project_paths()
+
+    def elide_recent_project_paths(self):
+        """Elide long names and paths in the recent projects list to the available width."""
+
+        list_widget = self.ui.listWidget_recent_projects
+        available = list_widget.viewport().width() - 24
+        if available <= 0:
+            return
+        for i in range(list_widget.count()):
+            row = list_widget.itemWidget(list_widget.item(i))
+            if row is None:
+                continue
+            labels = [label for label in row.findChildren(QtWidgets.QLabel) if label.property("full_text")]
+            date_width = 0
+            for label in row.findChildren(QtWidgets.QLabel):
+                if not label.property("full_text") and label.text():
+                    date_width = label.sizeHint().width() + 8
+            for label in labels:
+                mode = QtCore.Qt.TextElideMode(label.property("elide_mode"))
+                width = available - date_width if mode == QtCore.Qt.TextElideMode.ElideRight else available
+                label.setText(label.fontMetrics().elidedText(label.property("full_text"), mode, max(40, width)))
+
+    def open_recent_project_from_list(self, item):
+        """Open the project activated (double-click or Enter) in the recent projects list."""
+
+        entry = item.data(QtCore.Qt.ItemDataRole.UserRole)
+        if entry:
+            self.open_project(entry)
+
+    def eventFilter(self, watched, event):
+        """Make the project cards clickable and keep the recent projects list elided."""
+
+        handler = self.project_cards.get(watched)
+        if handler is not None:
+            event_type = event.type()
+            if event_type == QtCore.QEvent.Type.MouseButtonRelease:
+                if (event.button() == QtCore.Qt.MouseButton.LeftButton
+                        and watched.rect().contains(event.position().toPoint())):
+                    handler()
+                    return True
+            elif event_type == QtCore.QEvent.Type.KeyPress:
+                if event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter, QtCore.Qt.Key.Key_Space):
+                    handler()
+                    return True
+        elif (hasattr(self.ui, "listWidget_recent_projects")
+              and watched is self.ui.listWidget_recent_projects.viewport()
+              and event.type() == QtCore.QEvent.Type.Resize):
+            self.elide_recent_project_paths()
+        return super().eventFilter(watched, event)
+
+    def set_action_log_visible(self, visible, persist=True):
+        """Show the action log in place of the project text, or the project text again."""
+
+        stack = self.ui.stackedWidget_project
+        stack.setCurrentWidget(self.ui.textEdit if visible else self.ui.textBrowser_project)
+        self.action_log_visible = visible
+        button = self.ui.pushButton_action_log
+        if button.isChecked() != visible:
+            button.blockSignals(True)
+            button.setChecked(visible)
+            button.blockSignals(False)
+        if visible:
+            self.ui.textEdit.verticalScrollBar().setValue(self.ui.textEdit.verticalScrollBar().maximum())
+        if persist:
+            self.app.settings['action_log_visible'] = 'True' if visible else 'False'
+            self.app.write_config_ini(self.app.settings, self.app.ai_models)
+
+    def project_summary_requested(self):
+        """Project summary from the menu: make sure the log is visible before writing to it."""
+
+        self.set_action_log_visible(True)
+        self.project_summary_report()
+
     def fill_recent_projects_menu_actions(self):
         """ Get the recent projects from the .qualcoder txt file.
         Add up to five recent projects to the menu. """
 
         self.recent_projects = self.app.read_previous_project_paths()
+        self.fill_recent_projects_list()
         if len(self.recent_projects) == 0:
             return
         # Removes the qtdesigner default action. Also clears the section when a project is closed
@@ -1074,6 +1316,7 @@ Click "Yes" to start now.')
         # Project menu
         self.ui.actionClose_Project.setEnabled(False)
         self.ui.actionProject_Memo.setEnabled(False)
+        self.ui.pushButton_project_memo.setEnabled(False)
         self.ui.actionProject_Exchange_Export.setEnabled(False)
         self.ui.actionREFI_Codebook_export.setEnabled(False)
         self.ui.actionREFI_Codebook_import.setEnabled(False)
@@ -1126,6 +1369,7 @@ Click "Yes" to start now.')
         # Project menu
         self.ui.actionClose_Project.setEnabled(True)
         self.ui.actionProject_Memo.setEnabled(True)
+        self.ui.pushButton_project_memo.setEnabled(True)
         self.ui.actionProject_Exchange_Export.setEnabled(True)
         self.ui.actionREFI_Codebook_export.setEnabled(True)
         self.ui.actionREFI_Codebook_import.setEnabled(True)
@@ -1351,6 +1595,7 @@ Click "Yes" to start now.')
         self.app.help_wiki("")
 
     def display_menu_key_shortcuts(self):
+        self.set_action_log_visible(True)
         self.ui.textEdit.append(menu_shortcuts_display)
         self.ui.textEdit.append(coding_shortcuts_display)
         self.ui.tabWidget.setCurrentWidget(self.ui.tab_action_log)
@@ -2115,6 +2360,9 @@ Click "Yes" to start now.')
         # the short background-loading window.
         if self.ai_import_thread is not None and self.ai_import_thread.isRunning():
             self.ai_import_thread.wait()
+        # Same for the lighter search index import started without the AI runtime
+        if self.vectorstore_import_thread is not None and self.vectorstore_import_thread.isRunning():
+            self.vectorstore_import_thread.wait()
 
         self.external_mcp.stop()
         self.close_project()
@@ -2354,6 +2602,7 @@ Click "Yes" to start now.')
         self.settings_report(swith_to_action_log=False)
         font = f'font: {self.app.settings["fontsize"]}pt "{self.app.settings["font"]}";'
         self.setStyleSheet(font)
+        self.update_coder_display()
         self.update_placeholder_tab_styles()
         if self.ai_chat_window is not None:
             self.ai_chat_window.init_styles()
@@ -2427,6 +2676,42 @@ Click "Yes" to start now.')
         # New path variable from recent_projects.txt contains time | path
         # Older variable only listed the project path
         proj_path = path_.split("|", maxsplit=1)[-1]
+        progress = self._show_project_open_progress(Path(proj_path).name)
+        try:
+            self._open_project_steps(proj_path, newproject, progress)
+        finally:
+            progress.close()
+            progress.deleteLater()
+
+    def _show_project_open_progress(self, project_name):
+        """Show a progress dialog so opening a project gives visible feedback."""
+
+        progress = QtWidgets.QProgressDialog(_("Opening project: ") + project_name, "", 0, 5, self)
+        progress.setWindowTitle(_("Open project"))
+        progress.setCancelButton(None)
+        progress.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setMinimumWidth(420)
+        progress.setValue(0)
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+        return progress
+
+    @staticmethod
+    def _project_open_step(progress, value, text):
+        """Advance the project opening progress dialog and repaint it."""
+
+        if progress is None:
+            return
+        progress.setLabelText(text)
+        progress.setValue(value)
+        QtWidgets.QApplication.processEvents()
+
+    def _open_project_steps(self, proj_path, newproject, progress=None):
+        """Validate, migrate and load the project at proj_path. See open_project."""
+
         try:
             proj_path, project_connection = self._open_project_connection(proj_path)
         except ProjectOpenError as err:
@@ -2499,6 +2784,8 @@ Click "Yes" to start now.')
         self.app.append_recent_project(self.app.project_path)
         self.fill_recent_projects_menu_actions()
         self.setWindowTitle("QualCoder " + self.app.project_name)
+        self.update_coder_display()
+        self._project_open_step(progress, 1, _("Checking the project database"))
 
         # Check avid column in code_text table, Database version v2
         cur = self.app.conn.cursor()
@@ -2885,19 +3172,23 @@ Click "Yes" to start now.')
 
         # Save a date and 24 hour stamped backup
         if self.app.settings['backup_on_open'] == 'True' and newproject == "no":
+            self._project_open_step(progress, 2, _("Saving a backup copy of the project"))
             msg, backup_name = self.app.save_backup()
             self.ui.textEdit.append(msg)
+        self._project_open_step(progress, 3, _("Preparing AI and search components"))
         # AI: init llm and update vectorstore after backup to avoid locked sqlite sidecar files.
         if self.app.ai is not None:
             self.app.ai.init_llm(self)
         self.start_vectorstore_background_loading()
         if self.ai_chat_window is not None:
             self.ai_chat_window.init_ai_chat(self.app)
+        self._project_open_step(progress, 4, _("Preparing the project summary"))
         msg = f"{_('Project Opened: ')}{self.app.project_name}"
         self.ui.textEdit.append(msg)
         self.project_summary_report()
         self.show_menu_options()
         self.external_mcp.sync_with_application_state()
+        self._project_open_step(progress, 5, _("Project opened"))
 
     def project_summary_report(self):
         """ Add a summary of the project to the text edit.
@@ -3010,6 +3301,7 @@ Click "Yes" to start now.')
         self.app.delete_backup_path_name = ""
         self.app.delete_backup = True
         self.project = {"databaseversion": "", "date": "", "memo": "", "about": ""}
+        self.fill_recent_projects_list()  # No open project left to highlight
         self.hide_menu_options()
         self.setWindowTitle("QualCoder")
         self.app.write_config_ini(self.app.settings, self.app.ai_models)

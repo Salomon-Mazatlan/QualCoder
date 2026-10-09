@@ -456,6 +456,60 @@ coding_shortcuts_display = coding_text_shortcuts + coding_pdf_shortcuts
 coding_shortcuts_display += coding_image_shortcuts + coding_av_shortcuts + code_tree_shortcuts
 coding_shortcuts_display += database_queries_shortcuts
 
+def project_tab_info():
+    """Return translated Markdown for the Project tab placeholder."""
+
+    return _("""# Project
+
+The Project tab is the starting point for your work. Create or open a project with the buttons on the left,
+where you can also change [Settings](qualcoder://menu/project/settings), the [Project Memo](qualcoder://menu/project/project_memo)
+and the current coder name, or use the [Project menu](qualcoder://menu/project). The action log below records what you do during a session.
+
+
+## [Create New Project](qualcoder://menu/project/create_new_project)
+
+- A QualCoder project is a folder ending in .qda. It contains the project database and folders for imported documents, images, audio and video.
+- Choose a name and a location, and the project folder is created for you.
+- [Help: Creating a new project](qualcoder://help/3.1.-Creating-a-New-Project/)
+
+
+## [Open Project](qualcoder://menu/project/open_project)
+
+- Select an existing .qda project folder. Recently used projects are also listed on the left and in the [Open Recent Project](qualcoder://menu/project/open_recent_project) menu.
+- A dated backup of the project can be made each time it is opened. See the backup options in Settings.
+
+
+## [Project Memo](qualcoder://menu/project/project_memo)
+
+- Describe the research topic, questions, methodology, and the participants and data collected.
+- The AI agent reads this memo to understand the context of your project.
+
+
+## [Settings](qualcoder://menu/project/settings)
+
+- Set your coder name, fonts, language, colour style, backups, and the AI integration.
+- [Help: Settings](qualcoder://help/2.2.-Settings/)
+
+
+## [Project Summary](qualcoder://menu/project/project_summary)
+
+- Writes an overview of the open project to the action log: files, cases, codes, categories, attributes, journals, and any bad links to files.
+
+
+## [Import](qualcoder://menu/project/import) and [Export](qualcoder://menu/project/export)
+
+- Exchange projects and codebooks with other software through the REFI-QDA standard.
+- Import RQDA, Taguette and Sonal projects, or a plain text list of codes.
+- Export the codebook as an ODT file, with or without memos.
+- [Help: Imports and exports](qualcoder://help/6.1.-Imports-and-Exports/)
+
+
+## [Close Project](qualcoder://menu/project/close_project)
+
+- Closes the open project. Workspaces with unsaved changes are checked first, and a backup made on opening is removed if nothing changed.
+""")
+
+
 def manage_tab_info():
     """Return translated Markdown for the Manage tab placeholder."""
 

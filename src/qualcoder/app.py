@@ -271,15 +271,28 @@ class App(object):
 
         if new_path == "":
             return
-        nowdate = datetime.datetime.now().astimezone().strftime("%Y-%m-%d_%H:%M:%S")
+        date_format = "%Y-%m-%d_%H:%M:%S"
+        now = datetime.datetime.now().astimezone().replace(microsecond=0, tzinfo=None)
         # Result is a list of strings containing yyyy-mm-dd:hh:mm:ss|projectpath
         result = self.read_previous_project_paths()
-        dated_path = nowdate + "|" + new_path
         # The path is the last '|' field; legacy lines are bare paths without a date.
         # Remove any existing entry for this project and re-add it with a fresh date.
         # Previously, a legacy-format line at result[0] (no '|') silently skipped the
         # append forever, so new projects were never saved to the recent list.
         result = [line for line in result if line.split("|")[-1] != new_path]
+        # Entries are ordered by their date string, so the new one must be strictly newer
+        # than every other entry. Closing one project and opening another within the same
+        # second would otherwise tie and fall back to alphabetical order.
+        for line in result:
+            date_text = line.split("|", maxsplit=1)[0] if "|" in line else ""
+            try:
+                latest = datetime.datetime.strptime(date_text, date_format)
+            except ValueError:
+                continue
+            if latest >= now:
+                now = latest + datetime.timedelta(seconds=1)
+        nowdate = now.strftime(date_format)
+        dated_path = nowdate + "|" + new_path
         result.append(dated_path)
         result.sort()
         if len(result) > 8:
