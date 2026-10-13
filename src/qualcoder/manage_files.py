@@ -53,6 +53,8 @@ from .color_selector import colour_ranges, colors
 from .confirm_delete import DialogConfirmDelete
 from .docx import opendocx, getdocumenttext
 from .edit_textfile import DialogEditTextFile
+from .file_case_tree import FileCaseTreeController
+from .file_folders import FileFolderTreeController
 from .GUI.ui_dialog_manage_files import Ui_Dialog_manage_files
 from .helpers import ExportDirectoryPathDialog, Message, msecs_to_hours_mins_secs, \
     extract_epub_fulltext
@@ -253,8 +255,9 @@ class DialogManageFiles(QtWidgets.QDialog):
     MEMO_COLUMN = 1
     DATE_COLUMN = 2
     ID_COLUMN = 3
-    CASE_COLUMN = 4
-    ATTRIBUTE_START_COLUMN = 5
+    FOLDER_COLUMN = 4
+    CASE_COLUMN = 5
+    ATTRIBUTE_START_COLUMN = 6
 
     def __init__(self, app, parent_text_edit, tab_coding, tab_reports, main_window: QtWidgets.QMainWindow):
 
@@ -342,6 +345,26 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.ui.tableWidget.horizontalHeader().setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.ui.tableWidget.horizontalHeader().customContextMenuRequested.connect(self.table_header_menu)
         self.ui.tableWidget.horizontalHeader().setToolTip(_("Right click header row to hide columns"))
+        # Folder and case trees on the left, filled by fill_table. Ids of the files each tree lets through
+        self.folder_file_ids = None
+        self.case_file_ids = None
+        self.folder_tree = FileFolderTreeController(self.app, self.ui.treeWidget_folders, self)
+        self.folder_tree.folder_selected.connect(self.folder_tree_selected)
+        self.folder_tree.folders_changed.connect(self._emit_project_table_changes)
+        self.case_tree = FileCaseTreeController(self.app, self.ui.treeWidget_cases, self)
+        self.case_tree.case_selected.connect(self.case_tree_selected)
+        self.case_tree.cases_changed.connect(self._emit_project_table_changes)
+        self.folder_tree.setup_filter_bar(self.ui.lineEdit_folders_filter, self.ui.pushButton_clear_filter_folders,
+                                          _("Search folders"), _("Clear folder filter"))
+        self.case_tree.setup_filter_bar(self.ui.lineEdit_cases_filter, self.ui.pushButton_clear_filter_cases,
+                                        _("Search cases"), _("Clear case filter"))
+        # Files can be dragged between the two trees
+        self.folder_tree.peer_trees = [self.ui.treeWidget_cases]
+        self.case_tree.peer_trees = [self.ui.treeWidget_folders]
+        self.ui.splitter.setStretchFactor(0, 1)
+        self.ui.splitter.setStretchFactor(1, 4)
+        self.ui.splitter.setSizes([220, 680])
+        self.ui.splitter_trees.setSizes([300, 200])
         self.load_file_data()
         if getattr(self.app, "project_events", None) is not None:
             self.app.project_events.project_data_changed.connect(self._on_project_data_changed)
@@ -389,9 +412,157 @@ class DialogManageFiles(QtWidgets.QDialog):
         if source is self or not isinstance(tables, list):
             return
         changed_tables = set(tables)
-        if not changed_tables.intersection({"attribute", "attribute_type"}):
+        if not changed_tables.intersection({"attribute", "attribute_type", "cases", "case_text"}):
             return
         self._reload_after_attribute_change()
+
+    # Folders
+
+    @property
+    def current_folderid(self):
+        """ Selected folder id in the tree, None for all files. """
+
+        return self.folder_tree.current_folderid
+
+    def refresh_folder_file_ids(self):
+        """ Cache the ids of the files the folder and case trees let through. None means no filter. """
+
+        self.folder_file_ids = self.folder_tree.filter_file_ids()
+        self.case_file_ids = self.case_tree.filter_file_ids()
+
+    def folder_selected(self, _id=None):
+        """ Folder or case selection changed: filter the table. """
+
+        self.refresh_folder_file_ids()
+        self.apply_file_filter()
+        self.folder_tree.update_clear_button()
+        self.case_tree.update_clear_button()
+
+    def folder_tree_selected(self, folderid):
+        """ Folder and case filters are exclusive: picking a folder clears the case. """
+
+        if folderid is not None:
+            self.case_tree.clear_filter()
+        self.folder_selected()
+
+    def case_tree_selected(self, caseid):
+        """ Picking a case clears the folder. """
+
+        if caseid is not None:
+            self.folder_tree.clear_filter()
+        self.folder_selected()
+
+    def tree_file_selected(self, fid, caseid=None, from_cases=False):
+        """ A file was clicked in a tree: select its table row.
+        The other tree's filter is cleared; this tree's filter switches to show the file if needed. """
+
+        for row, data in enumerate(self.source):
+            if data['id'] != fid:
+                continue
+            if from_cases:
+                self.folder_tree.clear_filter()
+                if self.case_file_ids is not None and fid not in self.case_file_ids:
+                    self.case_tree.set_current_case(caseid)
+            else:
+                self.case_tree.clear_filter()
+                if self.folder_file_ids is not None and fid not in self.folder_file_ids:
+                    self.folder_tree.set_current_folder(data.get('folderid'))
+            self.folder_selected()
+            self.ui.tableWidget.setCurrentCell(row, self.NAME_COLUMN)
+            self.ui.tableWidget.scrollToItem(self.ui.tableWidget.item(row, self.NAME_COLUMN))
+            self.update_label_file_count()
+            return
+
+    def files_cases_changed(self, fids):
+        """ Case links of these files changed: refresh their Case cells and the filters. """
+
+        fids = set(fids)
+        self.ui.tableWidget.blockSignals(True)
+        for row, data in enumerate(self.source):
+            if data['id'] not in fids:
+                continue
+            data['case'] = self.get_cases_by_filename(data['name'])
+            if row < self.ui.tableWidget.rowCount():
+                case_item = self.ui.tableWidget.item(row, self.CASE_COLUMN)
+                if case_item is not None:
+                    case_item.setText(data['case'])
+        self.ui.tableWidget.blockSignals(False)
+        self.refresh_folder_file_ids()
+        self.prune_header_filters()
+        self.apply_file_filter()
+
+    def files_folder_changed(self, fids):
+        """ Files were moved between folders: refresh tooltips and the folder filter. """
+
+        self.refresh_folder_file_ids()
+        self.ui.tableWidget.blockSignals(True)
+        for row, data in enumerate(self.source):
+            if data['id'] in fids and row < self.ui.tableWidget.rowCount():
+                item = self.ui.tableWidget.item(row, self.NAME_COLUMN)
+                if item is not None:
+                    item.setToolTip(self.name_tooltip(data))
+                folder_item = self.ui.tableWidget.item(row, self.FOLDER_COLUMN)
+                if folder_item is not None:
+                    folder_item.setText(self.folder_cell_text(data))
+        self.ui.tableWidget.blockSignals(False)
+        self.prune_header_filters()
+        self.apply_file_filter()
+
+    def folder_cell_text(self, data) -> str:
+        """ Folder path shown in the Folder column, empty at top level. """
+
+        if data.get('folderid') is None:
+            return ""
+        return self.folder_tree.folder_path(data['folderid'])
+
+    def name_tooltip(self, data) -> str:
+        """ Tooltip of the name cell: metadata, folder path and linked file details. """
+
+        name_tt = data['metadata']
+        if data.get('folderid') is not None:
+            name_tt += "\n" + _("Folder") + ": " + self.folder_tree.folder_path(data['folderid'])
+        if data['mediapath'] is not None and ':' in data['mediapath']:
+            name_tt += _("\nExternally linked file:\n")
+            name_tt += data['mediapath'].split(':', 1)[1]
+            badlink = self.app.check_bad_file_links(data['id'])
+            if badlink:
+                name_tt += "\nORIGINAL FILE NOT FOUND"
+        return name_tt
+
+    def view_file(self, fid):
+        """ Open a file chosen in the folder tree. """
+
+        for row, data in enumerate(self.source):
+            if data['id'] == fid:
+                self.ui.tableWidget.setCurrentCell(row, self.NAME_COLUMN)
+                self.view()
+                return
+
+    def move_selected_files_to_folder(self, folderid=None, ask=True):
+        """ Move the selected visible table rows to a folder, asking for it when ask is True. """
+
+        fids = [self.source[r]['id'] for r in self.visible_selected_rows() if r < len(self.source)]
+        if not fids:
+            return
+        if ask:
+            self.folder_tree.move_files_dialog(fids)
+        else:
+            self.folder_tree.move_files_to_folder(fids, folderid)
+
+    def assign_new_files_to_folder(self, max_id_before):
+        """ Files imported after max_id_before go into the selected folder. """
+
+        if self.current_folderid is None:
+            return
+        cur = self.app.conn.cursor()
+        cur.execute("update source set folderid=? where id>? and folderid is null",
+                    [self.current_folderid, max_id_before])
+        self.app.conn.commit()
+
+    def max_source_id(self) -> int:
+        cur = self.app.conn.cursor()
+        cur.execute("select ifnull(max(id), 0) from source")
+        return cur.fetchone()[0]
 
     def help(self):
         """ Open help for transcribe section in browser. """
@@ -401,6 +572,7 @@ class DialogManageFiles(QtWidgets.QDialog):
     PLAIN_TEXT_KEY = "__plain__"
     NO_DATE_KEY = "__nodate__"
     NO_CASE_KEY = "__nocase__"
+    NO_FOLDER_KEY = "__nofolder__"
 
     def setup_header_filters(self):
         """
@@ -414,7 +586,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         self.filter_header.filter_clicked.connect(self.show_header_filter_popup)
         self.filter_header.setVisible(True)
 
-    BASE_COLUMN_KEYS = {0: "name", 1: "memo", 2: "date", 3: "id", 4: "case"}
+    BASE_COLUMN_KEYS = {0: "name", 1: "memo", 2: "date", 3: "id", 4: "folder", 5: "case"}
 
     def column_filter_key(self, col):
         """
@@ -458,6 +630,8 @@ class DialogManageFiles(QtWidgets.QDialog):
             return [self.file_date_of(data)]
         if col == self.ID_COLUMN:
             return [str(data['id'])]
+        if col == self.FOLDER_COLUMN:
+            return [self.file_folder_of(data)]
         if col == self.CASE_COLUMN:
             return sorted(self.file_cases_of(data))
         att_pos = col - self.ATTRIBUTE_START_COLUMN
@@ -484,6 +658,10 @@ class DialogManageFiles(QtWidgets.QDialog):
         the context menu / loaded display criteria keep this row visible.
         """
 
+        if self.folder_file_ids is not None and data['id'] not in self.folder_file_ids:
+            return False
+        if self.case_file_ids is not None and data['id'] not in self.case_file_ids:
+            return False
         search = self.ui.lineEdit_search_files.text().lower()
         if search and search not in data['name'].lower():
             return False
@@ -533,6 +711,12 @@ class DialogManageFiles(QtWidgets.QDialog):
         if col == self.ID_COLUMN:
             ids = {str(s['id']) for s in sources}
             return [(id_, id_) for id_ in sorted(ids, key=lambda v: int(v) if v.isdigit() else 0)]
+        if col == self.FOLDER_COLUMN:
+            paths = {self.file_folder_of(s) for s in sources}
+            options = [(path_, path_) for path_ in sorted(paths - {self.NO_FOLDER_KEY}, key=str.lower)]
+            if self.NO_FOLDER_KEY in paths:
+                options.append((self.NO_FOLDER_KEY, _("No folder")))
+            return options
         if col == self.CASE_COLUMN:
             names = {name for s in sources for name in self.file_cases_of(s)}
             options = [(name, name) for name in sorted(names - {self.NO_CASE_KEY})]
@@ -645,6 +829,15 @@ class DialogManageFiles(QtWidgets.QDialog):
 
         names = {name for name in (data['case'] or "").split(";") if name}
         return names if names else {self.NO_CASE_KEY}
+
+    def file_folder_of(self, data):
+        """
+        Folder path of the file, or the no folder key when it sits at top level.
+        """
+
+        if data.get('folderid') is None:
+            return self.NO_FOLDER_KEY
+        return self.folder_tree.folder_path(data['folderid'])
 
 
     def file_filter_active(self):
@@ -981,7 +1174,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                                                              QtWidgets.QLineEdit.EchoMode.Normal)
             if not ok or show_filter == "":  # Cancel must not rearrange columns
                 return
-            for c in range(4, self.ui.tableWidget.columnCount()):
+            for c in range(self.FOLDER_COLUMN, self.ui.tableWidget.columnCount()):
                 h_text = self.ui.tableWidget.horizontalHeaderItem(c).text()
                 if len(h_text) >= len(show_filter) and show_filter == h_text[:len(show_filter)]:
                     self.ui.tableWidget.setColumnHidden(c, False)
@@ -1046,6 +1239,11 @@ class DialogManageFiles(QtWidgets.QDialog):
         if col == self.DATE_COLUMN:
             action_date_asc = menu.addAction(_("Order ascending"))
             action_date_desc = menu.addAction(_("Order descending"))
+        action_folder_asc = None
+        action_folder_desc = None
+        if col == self.FOLDER_COLUMN:
+            action_folder_asc = menu.addAction(_("Order ascending"))
+            action_folder_desc = menu.addAction(_("Order descending"))
         action_casename_asc = None
         action_casename_desc = None
         action_assign_case = None
@@ -1087,6 +1285,13 @@ class DialogManageFiles(QtWidgets.QDialog):
         action_export_to_linked = None
         action_import_linked = None
         action_mark_speakers = None
+        action_move_to_folder = None
+        action_remove_from_folder = None
+        if col in (self.NAME_COLUMN, self.FOLDER_COLUMN):
+            action_move_to_folder = menu.addAction(_("Move to folder"))
+            selected_rows = self.visible_selected_rows()
+            if any(self.source[r].get('folderid') is not None for r in selected_rows if r < len(self.source)):
+                action_remove_from_folder = menu.addAction(_("Remove from folder"))
         if col == self.NAME_COLUMN:
             action_rename = menu.addAction(_("Rename database entry"))
             action_export = menu.addAction(_("Export"))
@@ -1136,6 +1341,12 @@ class DialogManageFiles(QtWidgets.QDialog):
         if action == action_extract_pdf_text:
             self.extract_pdf_text_copy(row)
             return
+        if action == action_move_to_folder:
+            self.move_selected_files_to_folder()
+            return
+        if action == action_remove_from_folder:
+            self.move_selected_files_to_folder(None, ask=False)
+            return
         if self.av_dialog_open is not None:
             # Guard: a dialog that failed mid-init can leave mediaplayer as None
             if getattr(self.av_dialog_open, 'mediaplayer', None) is not None:
@@ -1164,6 +1375,10 @@ class DialogManageFiles(QtWidgets.QDialog):
             self.load_file_data("date desc")
         if action == action_type:
             self.load_file_data("filetype")
+        if action == action_folder_asc:
+            self.load_file_data("folder asc")
+        if action == action_folder_desc:
+            self.load_file_data("folder desc")
         if action == action_casename_asc:
             self.load_file_data("casename asc")
         if action == action_casename_desc:
@@ -1488,8 +1703,9 @@ class DialogManageFiles(QtWidgets.QDialog):
                 self.ui.tableWidget.item(row, self.CASE_COLUMN).setText(cases_text)
                 self.source[row]['case'] = cases_text
         self._emit_project_table_changes(['case_text'])
-        if self.file_filter_active():
-            self.apply_file_filter()
+        self.case_tree.fill_tree()
+        self.refresh_folder_file_ids()
+        self.apply_file_filter()
 
     def rename_database_entry(self):
         """ Rename the database entry of the file. """
@@ -1889,6 +2105,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             "date asc" = date ascending, "date desc" = date descending, "filetype" = mediapath,
                 "casename asc" = by alphabetic casename ascending
                 "casename desc" = by alphabetic descending
+                "folder asc" / "folder desc" = by folder path, then name
                 "attribute:attribute name" selected attribute - ascending
                 "attribute desc: attribute name ttribute - descending
         """
@@ -1899,29 +2116,29 @@ class DialogManageFiles(QtWidgets.QDialog):
         cur = self.app.conn.cursor()
         placeholders = None
         # Default alphabetic order
-        sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid from source " \
+        sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid, folderid from source " \
               "order by upper(name)"
         if order_by == "filename desc":
             sql += " desc"
         if order_by == "date asc":
-            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid from source " \
+            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid, folderid from source " \
                   "order by date, upper(name)"
         if order_by == "date desc":
-            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid from source " \
+            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid, folderid from source " \
                   "order by date desc, upper(name) desc"
         if order_by == "filetype":
-            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid from source " \
+            sql = "select name, id, fulltext, mediapath, ifnull(memo,''), owner, date, av_text_id, risid, folderid from source " \
                   "order by mediapath"
         if order_by == "casename asc":
             sql = "select distinct source.name, source.id, source.fulltext, source.mediapath, ifnull(source.memo,''), "
-            sql += "source.owner, source.date, av_text_id, risid "
+            sql += "source.owner, source.date, av_text_id, risid, source.folderid "
             sql += "from source left join case_text on source.id=case_text.fid "
             sql += "left join cases on cases.caseid=case_text.caseid "
             sql += "order by cases.name, source.name "
 
         if order_by == "casename desc":
             sql = "select distinct source.name, source.id, source.fulltext, source.mediapath, ifnull(source.memo,''), "
-            sql += "source.owner, source.date, av_text_id, risid "
+            sql += "source.owner, source.date, av_text_id, risid, source.folderid "
             sql += "from source left join case_text on source.id=case_text.fid "
             sql += "left join cases on cases.caseid=case_text.caseid "
             sql += "order by cases.name desc, source.name desc"
@@ -1932,7 +2149,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             cur.execute("select valuetype from attribute_type where name=?", [attribute_name])
             attr_type = cur.fetchone()[0]
             sql = "select source.name, source.id, fulltext, mediapath, ifnull(source.memo,''), source.owner, "
-            sql += "source.date, av_text_id, risid from source join attribute on attribute.id = source.id "
+            sql += "source.date, av_text_id, risid, folderid from source join attribute on attribute.id = source.id "
             sql += " where attribute.attr_type = 'file' and attribute.name=? "
             if attr_type == "character":
                 sql += "order by lower(attribute.value) asc "
@@ -1946,7 +2163,7 @@ class DialogManageFiles(QtWidgets.QDialog):
             cur.execute("select valuetype from attribute_type where name=?", [attribute_name])
             attr_type = cur.fetchone()[0]
             sql = "select source.name, source.id, fulltext, mediapath, ifnull(source.memo,''), source.owner, "
-            sql += "source.date, av_text_id, risid from source join attribute on attribute.id = source.id "
+            sql += "source.date, av_text_id, risid, folderid from source join attribute on attribute.id = source.id "
             sql += " where attribute.attr_type = 'file' and attribute.name=? "
             if attr_type == "character":
                 sql += "order by lower(attribute.value) desc "
@@ -1965,9 +2182,15 @@ class DialogManageFiles(QtWidgets.QDialog):
                 self.parent_text_edit.append(err_ + " : " + row[3])
             self.source.append({'name': row[0], 'id': row[1], 'fulltext': row[2],
                                 'mediapath': row[3], 'memo': row[4], 'owner': row[5], 'date': row[6],
-                                'av_text_id': row[7], 'risid': row[8], 'metadata': metadata, 'icon': icon,
+                                'av_text_id': row[7], 'risid': row[8], 'folderid': row[9],
+                                'metadata': metadata, 'icon': icon,
                                 'case': self.get_cases_by_filename(row[0]),
                                 'attributes': []})
+        if order_by in ("folder asc", "folder desc"):
+            # Folder paths are not in the source table, so this sort happens here
+            self.folder_tree.load_folders()
+            self.source.sort(key=lambda s: (self.folder_tree.folder_path(s['folderid']).lower(), s['name'].lower()),
+                             reverse=order_by == "folder desc")
         # Auto-fix invalid filenames in the database
         cur2 = self.app.conn.cursor()
         for s in self.source:
@@ -1979,7 +2202,7 @@ class DialogManageFiles(QtWidgets.QDialog):
                 s['name'] = new_name
         # No event here: this runs on every refresh and sort, including refreshes
         # triggered by the bus itself. The user actions that write source emit.
-        self.header_labels = [_("Name"), _("Memo"), _("Date"), _("Id"), _("Case")]
+        self.header_labels = [_("Name"), _("Memo"), _("Date"), _("Id"), _("Folder"), _("Case")]
         # Attributes
         sql = "select name from attribute_type where caseOrFile='file' order by upper(name)"
         cur.execute(sql)
@@ -2206,6 +2429,12 @@ class DialogManageFiles(QtWidgets.QDialog):
         x = self.ui.tableWidget.currentRow()
         y = self.ui.tableWidget.currentColumn()
         self.update_label_file_count()
+        if 0 <= x < len(self.source):
+            # Mirror the table selection in the trees
+            self.folder_tree.select_file(self.source[x]['id'])
+            if self.case_tree.current_caseid is not None:
+                self.case_tree.select_file(self.source[x]['id'],
+                                           self.case_tree.caseid_key(self.case_tree.current_caseid))
         if y == self.MEMO_COLUMN:
             name = self.source[x]['name'].lower()
             cur = self.app.conn.cursor()
@@ -2613,13 +2842,14 @@ class DialogManageFiles(QtWidgets.QDialog):
         # Create entry details to add to self.source and to database
         item = {'name': name, 'id': -1, 'fulltext': '', 'memo': "",
                 'owner': self.app.settings['codername'], 'date': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'mediapath': None, 'icon': None, 'metadata': '', 'case': ""}
+                'mediapath': None, 'icon': None, 'metadata': '', 'case': "",
+                'folderid': self.current_folderid}
         # Update database
         cur = self.app.conn.cursor()
-        cur.execute("insert into source(name,fulltext,mediapath,memo,owner,date) values(?,?,?,?,?,?)",
+        cur.execute("insert into source(name,fulltext,mediapath,memo,owner,date,folderid) values(?,?,?,?,?,?,?)",
                     (
                         item['name'], item['fulltext'], item['mediapath'], item['memo'], item['owner'],
-                        item['date']))
+                        item['date'], item['folderid']))
         self.app.conn.commit()
         cur.execute("select last_insert_rowid()")
         id_ = cur.fetchone()[0]
@@ -2704,6 +2934,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         columns = [str(c) for c in df.columns]
         dialog = DialogSurveyImport(columns, self)
         if not dialog.exec(): return
+        max_id_before = self.max_source_id()
         text_cols, case_cols, attr_cols = dialog.get_selections()
         #filename_col = dialog.get_filename_column()
         autocode_enabled = dialog.get_autocode_setting()
@@ -2882,6 +3113,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         msg += "\n" + "▔" * 20  # U2594
         self.app.delete_backup = False
         self.update_files_in_dialogs()
+        self.assign_new_files_to_folder(max_id_before)
         self.load_file_data()
         self.parent_text_edit.append("<h2>" + _("Survey Import") + "</h2>")
         self.parent_text_edit.append(msg)
@@ -2929,7 +3161,7 @@ class DialogManageFiles(QtWidgets.QDialog):
         imports = response[0]
         if not imports:
             return
-
+        max_id_before = self.max_source_id()
         steps = len(imports)
         file_number = 0
         first_filename = Path(imports[0]).name
@@ -3083,6 +3315,8 @@ class DialogManageFiles(QtWidgets.QDialog):
         progress.close()
         if pdf_msg != "":
             self.parent_text_edit.append(pdf_msg)
+        # New files land in the selected folder
+        self.assign_new_files_to_folder(max_id_before)
         self.load_file_data()
         self.fill_table()
         self.app.delete_backup = False
@@ -4004,6 +4238,10 @@ class DialogManageFiles(QtWidgets.QDialog):
             count_text = f"{visible}/{total} " + _("Files")
         else:
             count_text = f"{total} " + _("Files")
+        if self.current_folderid is not None:
+            count_text += f" [{self.folder_tree.folder_path(self.current_folderid)}]"
+        if self.case_tree.current_caseid is not None:
+            count_text += f" [{_('Case')}: {self.case_tree.current_label()}]"
         if 0 <= row < len(self.source):
             count_text += f". {self.source[row]['name']}"
         self.ui.label_file.setText(count_text)
@@ -4012,6 +4250,10 @@ class DialogManageFiles(QtWidgets.QDialog):
         """ Fill the table widget with file details. """
 
         self.ui.tableWidget.blockSignals(True)
+        # Trees are refilled first so folder paths in tooltips are current
+        self.folder_tree.fill_tree()
+        self.case_tree.fill_tree()
+        self.refresh_folder_file_ids()
         self.ui.tableWidget.setColumnCount(len(self.header_labels))
         self.ui.tableWidget.setHorizontalHeaderLabels(self.header_labels)
         self.ui.tableWidget.horizontalHeader().setStretchLastSection(False)
@@ -4025,15 +4267,8 @@ class DialogManageFiles(QtWidgets.QDialog):
             name_item.setIcon(icon)
             # Having un-editable file names helps with assigning icons
             name_item.setFlags(name_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
-            # Externally linked - add link details to tooltip
-            name_tt = data['metadata']
-            if data['mediapath'] is not None and ':' in data['mediapath']:
-                name_tt += _("\nExternally linked file:\n")
-                name_tt += data['mediapath'].split(':', 1)[1]
-                badlink = self.app.check_bad_file_links(data['id'])
-                if badlink:
-                    name_tt += f"\nORIGINAL FILE NOT FOUND"
-            name_item.setToolTip(name_tt)
+            # Metadata, folder path and externally linked details in the tooltip
+            name_item.setToolTip(self.name_tooltip(data))
             self.ui.tableWidget.setItem(row, self.NAME_COLUMN, name_item)
             trimmed_date = data['date'].split()[0]
             date_item = QtWidgets.QTableWidgetItem(trimmed_date)
@@ -4053,6 +4288,9 @@ class DialogManageFiles(QtWidgets.QDialog):
             iditem = QtWidgets.QTableWidgetItem(str(fid))
             iditem.setFlags(iditem.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
             self.ui.tableWidget.setItem(row, self.ID_COLUMN, iditem)
+            folder_item = QtWidgets.QTableWidgetItem(self.folder_cell_text(data))
+            folder_item.setFlags(folder_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
+            self.ui.tableWidget.setItem(row, self.FOLDER_COLUMN, folder_item)
             case_item = QtWidgets.QTableWidgetItem(data['case'])
             case_item.setFlags(case_item.flags() ^ QtCore.Qt.ItemFlag.ItemIsEditable)
             self.ui.tableWidget.setItem(row, self.CASE_COLUMN, case_item)
@@ -4082,7 +4320,8 @@ class DialogManageFiles(QtWidgets.QDialog):
 
         self.update_label_file_count()
         if getattr(self, "header_filters", None) is not None and \
-                (self.file_filter_active() or self.rows_hidden):
+                (self.file_filter_active() or self.rows_hidden or self.folder_file_ids is not None
+                 or self.case_file_ids is not None):
             self.apply_file_filter()
         self.ui.tableWidget.blockSignals(False)
 

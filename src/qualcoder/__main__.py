@@ -2220,7 +2220,11 @@ Click "Yes" to start now.')
             "bookmarkpos integer, codername text, recently_used_codes text, avbookmarkfile integer, avbookmarkmsec integer, avbookmarktextpos integer)")
         cur.execute(
             "CREATE TABLE source (id integer primary key, name text, fulltext text, mediapath text, memo text, "
-            "owner text, date text, av_text_id integer, risid integer, unique(name))")
+            "owner text, date text, av_text_id integer, risid integer, folderid integer, unique(name))")
+        # Database version v18. Nested folders for files, source.folderid points to a folder
+        cur.execute(
+            "CREATE TABLE source_folder (folderid integer primary key, name text, memo text, "
+            "parent_folderid integer, owner text, date text)")
         cur.execute(
             "CREATE TABLE code_image (imid integer primary key,id integer,x1 integer, y1 integer, width integer, "
             "height integer, cid integer, memo text, date text, owner text, important integer, pdf_page integer)")
@@ -2293,7 +2297,7 @@ Click "Yes" to start now.')
         cur.execute("CREATE TABLE files_filter (filterid integer primary key, name text, filter text, owner text);")
         self.app.update_coder_names()  # Create table coder_names, add current coder, create views, etc.
         cur.execute("INSERT INTO project VALUES(?,?,?,?,?,?,?,?,null,null,null)",
-                    ('v17', datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"), '', self.app.version, 0,
+                    ('v18', datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"), '', self.app.version, 0,
                      0, self.app.settings['codername'], ""))
         self.app.conn.commit()
         try:
@@ -2792,6 +2796,16 @@ Click "Yes" to start now.')
             cur.execute('update project set databaseversion="v17", about=?', [self.app.version])
             self.app.conn.commit()
             self.ui.textEdit.append(_("Updating database to version") + " v17")
+        # Database version v18. Nested folders for files
+        try:
+            cur.execute("select folderid from source")
+        except sqlite3.OperationalError:
+            cur.execute("alter table source add folderid integer")
+            cur.execute("CREATE TABLE IF NOT EXISTS source_folder (folderid integer primary key, name text, "
+                        "memo text, parent_folderid integer, owner text, date text)")
+            cur.execute('update project set databaseversion="v18", about=?', [self.app.version])
+            self.app.conn.commit()
+            self.ui.textEdit.append(_("Updating database to version") + " v18")
         # Delete codings (fid, id) that do not have a matching source id
         sql = "select fid from code_text where fid not in (select source.id from source)"
         cur.execute(sql)
@@ -2827,6 +2841,11 @@ Click "Yes" to start now.')
         cur.execute(sql)
         # Mutual exclusivity: if a code somehow has both catid and supercid, supercid wins.
         cur.execute("update code_name set catid=null where supercid is not null and catid is not null")
+        # Fix 'lost' file folders: a deleted folder leaves files and sub-folders at top level
+        cur.execute("update source set folderid=null where folderid is not null and folderid not in "
+                    "(select folderid from source_folder)")
+        cur.execute("update source_folder set parent_folderid=null where parent_folderid is not null and "
+                    "parent_folderid not in (select folderid from source_folder)")
         self.app.conn.commit()
         # Break hierarchy cycles (a corrupted project could make a branch disappear).
         # Categories: code_cat.supercatid
