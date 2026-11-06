@@ -128,6 +128,7 @@ class App(object):
         self.last_export_directory = ""  # Default export location, which may be different from the working directory
         self.delete_backup = True  # Can delete the most current back up if the project has not been altered
         self.delete_backup_path_name = ""
+        self.backup_baseline_changes = None  # conn.total_changes when the opening backup was made
         self.userhome = str(Path('~').expanduser())
         self.confighome = str(qc_config_folder)
         self.configpath = str(qc_config_folder / 'config.ini')
@@ -1568,9 +1569,20 @@ class App(object):
         if not Path(backup).exists():
             return msg, backup
         msg += _("Project backup created: ") + backup
-        # Delete backup path - delete the backup if no changes occurred in the project during the session
-        self.delete_backup_path_name = backup
+        # Only the opening backup is deleted on close if unchanged; special operation backups are kept
+        if suffix == "":
+            self.delete_backup_path_name = backup
+            self.backup_baseline_changes = self.conn.total_changes if self.conn is not None else None
         return msg, backup
+
+    def project_changed_since_backup(self) -> bool:
+        """ True if the project was modified after the opening backup was made. """
+
+        if not self.delete_backup:
+            return True
+        if self.conn is None or self.backup_baseline_changes is None:
+            return False
+        return self.conn.total_changes != self.backup_baseline_changes
 
     def help_wiki(self, page_path: str):
         """ Open website doc help page in https://qualcoder.org.
