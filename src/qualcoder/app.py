@@ -128,7 +128,7 @@ class App(object):
         self.last_export_directory = ""  # Default export location, which may be different from the working directory
         self.delete_backup = True  # Can delete the most current back up if the project has not been altered
         self.delete_backup_path_name = ""
-        self.backup_baseline_changes = None  # conn.total_changes when the opening backup was made
+        self.backup_change_marks = None  # Database change counters when the opening backup was made
         self.userhome = str(Path('~').expanduser())
         self.confighome = str(qc_config_folder)
         self.configpath = str(qc_config_folder / 'config.ini')
@@ -1572,17 +1572,34 @@ class App(object):
         # Only the opening backup is deleted on close if unchanged; special operation backups are kept
         if suffix == "":
             self.delete_backup_path_name = backup
-            self.backup_baseline_changes = self.conn.total_changes if self.conn is not None else None
+            self.backup_change_marks = self._project_change_marks()
         return msg, backup
 
+    def _project_change_marks(self):
+        """ Counters that move on any change to the project database, or None if unreadable.
+        total_changes: rows written by this connection, schema_version: any schema change,
+        data_version: commits made by other connections. """
+
+        if self.conn is None:
+            return None
+        try:
+            return (self.conn.total_changes,
+                    self.conn.execute("pragma schema_version").fetchone()[0],
+                    self.conn.execute("pragma data_version").fetchone()[0])
+        except sqlite3.Error as err:
+            logger.warning(err)
+            return None
+
     def project_changed_since_backup(self) -> bool:
-        """ True if the project was modified after the opening backup was made. """
+        """ True if the project was modified after the opening backup was made.
+        If the counters cannot be read the project is treated as changed. """
 
         if not self.delete_backup:
             return True
-        if self.conn is None or self.backup_baseline_changes is None:
+        if self.conn is None or self.delete_backup_path_name == "":
             return False
-        return self.conn.total_changes != self.backup_baseline_changes
+        marks = self._project_change_marks()
+        return marks is None or marks != self.backup_change_marks
 
     def help_wiki(self, page_path: str):
         """ Open website doc help page in https://qualcoder.org.
