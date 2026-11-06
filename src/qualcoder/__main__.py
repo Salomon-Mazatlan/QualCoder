@@ -4022,7 +4022,7 @@ Click "Yes" to start now.')
         self.app.coding_tree_collapsed.clear()
         self.app.delete_backup_path_name = ""
         self.app.delete_backup = True
-        self.app.backup_baseline_changes = None
+        self.app.backup_change_marks = None
         self.project = {"databaseversion": "", "date": "", "memo": "", "about": ""}
         self.fill_recent_projects_list()  # No open project left to highlight
         self.hide_menu_options()
