@@ -4004,6 +4004,9 @@ Click "Yes" to start now.')
             self.app.vectorstore.close()
         
         if self.app.conn is not None:
+            # Covers modules that commit without clearing delete_backup themselves
+            if self.app.project_changed_since_backup():
+                self.app.delete_backup = False
             try:
                 self.app.conn.commit()
                 self.app.conn.close()
@@ -4019,6 +4022,7 @@ Click "Yes" to start now.')
         self.app.coding_tree_collapsed.clear()
         self.app.delete_backup_path_name = ""
         self.app.delete_backup = True
+        self.app.backup_baseline_changes = None
         self.project = {"databaseversion": "", "date": "", "memo": "", "about": ""}
         self.fill_recent_projects_list()  # No open project left to highlight
         self.hide_menu_options()
