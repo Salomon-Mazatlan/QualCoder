@@ -4059,7 +4059,8 @@ Click "Yes" to start now.')
         project_path = Path(self.app.project_path)
         if self.app.project_path == "" or not project_path.exists():
             return
-        if self.app.delete_backup_path_name != "" and self.app.delete_backup:
+        if self.app.delete_backup_path_name != "" and self.app.delete_backup \
+                and not self.app.project_changed_since_opening_backup():
             try:
                 shutil.rmtree(self.app.delete_backup_path_name)
             except Exception as err:
