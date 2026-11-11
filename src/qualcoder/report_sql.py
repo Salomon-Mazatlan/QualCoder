@@ -136,10 +136,11 @@ class DialogSQL(QtWidgets.QDialog):
         return list(DialogSQL.PROJECT_TABLES)
 
     @staticmethod
-    def _sql_without_leading_comments(sql):
-        """Remove leading whitespace and comments, so the first keyword can be checked."""
+    def _leading_sql_keywords(sql):
+        """Return the first two words in upper case, skipping leading whitespace and comments."""
 
-        return re.sub(r"^(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)+", "", sql, flags=re.DOTALL)
+        sql = re.sub(r"^(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)+", "", sql, flags=re.DOTALL)
+        return " ".join(sql.upper().split(None, 2)[:2])
 
     def _emit_project_table_changes(self, tables):
         """Notify other open dialogs about changed project tables."""
@@ -304,7 +305,7 @@ class DialogSQL(QtWidgets.QDialog):
             self.ui.label.setToolTip(self.queryTime)
             self.ui.label.setText(str(len(self.results)) + _(" rows"))
             # Extra messaging where rows will be zero
-            sql_start = self._sql_without_leading_comments(self.sql).upper()
+            sql_start = self._leading_sql_keywords(self.sql)
             if sql_start.startswith("CREATE TABLE"):
                 self.ui.label.setText(_("Table created"))
                 self.app.delete_backup = False
@@ -312,9 +313,8 @@ class DialogSQL(QtWidgets.QDialog):
                 self.ui.label.setText(_("Index created"))
                 self.app.delete_backup = False
                 self.app.conn.commit()
-            if sql_start.startswith(("DROP ", "ALTER ")):
+            if sql_start.startswith(("CREATE", "DROP", "ALTER")):
                 self.app.delete_backup = False
-                self.app.conn.commit()
             if sql_start.startswith("DELETE"):
                 self.ui.label.setText(str(cur.rowcount) + _(" rows deleted"))
                 self.app.delete_backup = False
@@ -353,8 +353,7 @@ class DialogSQL(QtWidgets.QDialog):
                 if self.ui.tableWidget_results.columnWidth(i) > 500:
                     self.ui.tableWidget_results.setColumnWidth(i, 500)
             self.ui.tableWidget_results.resizeRowsToContents()
-            sql_string = str(self.sql).upper()
-            if sql_string.find("CREATE ") == 0 or sql_string.find("DROP ") == 0 or sql_string.find("ALTER ") == 0:
+            if sql_start.startswith(("CREATE", "DROP", "ALTER")):
                 self.get_schema_update_tree_widget()
         except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
             Message(self.app, _("Error"), str(e), "warning").exec()
