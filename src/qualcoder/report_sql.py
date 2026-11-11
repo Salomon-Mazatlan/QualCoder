@@ -122,17 +122,24 @@ class DialogSQL(QtWidgets.QDialog):
 
     @staticmethod
     def _tables_written_by(sql):
-        """Name the table a user DELETE or UPDATE targets, for the project change event.
+        """Name the table a user DELETE, UPDATE or INSERT targets, for the project change event.
 
         Falls back to every project table when the target cannot be identified, so a
         hand-written query never leaves open dialogs showing stale data.
         """
 
-        match = re.search(r"(?:delete\s+from|update)\s+[\"\'`\[]?([a-zA-Z_][a-zA-Z0-9_]*)",
+        match = re.search(r"(?:delete\s+from|update|insert\s+into|replace\s+into)"
+                          r"\s+[\"\'`\[]?([a-zA-Z_][a-zA-Z0-9_]*)",
                           sql, re.IGNORECASE)
         if match and match.group(1).lower() in DialogSQL.PROJECT_TABLES:
             return [match.group(1).lower()]
         return list(DialogSQL.PROJECT_TABLES)
+
+    @staticmethod
+    def _sql_without_leading_comments(sql):
+        """Remove leading whitespace and comments, so the first keyword can be checked."""
+
+        return re.sub(r"^(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)+", "", sql, flags=re.DOTALL)
 
     def _emit_project_table_changes(self, tables):
         """Notify other open dialogs about changed project tables."""
@@ -297,20 +304,29 @@ class DialogSQL(QtWidgets.QDialog):
             self.ui.label.setToolTip(self.queryTime)
             self.ui.label.setText(str(len(self.results)) + _(" rows"))
             # Extra messaging where rows will be zero
-            if self.sql[0:12].upper() == "CREATE TABLE":
+            sql_start = self._sql_without_leading_comments(self.sql).upper()
+            if sql_start.startswith("CREATE TABLE"):
                 self.ui.label.setText(_("Table created"))
                 self.app.delete_backup = False
-            if self.sql[0:12].upper() == "CREATE INDEX":
+            if sql_start.startswith("CREATE INDEX"):
                 self.ui.label.setText(_("Index created"))
                 self.app.delete_backup = False
                 self.app.conn.commit()
-            if self.sql[0:6].upper() == "DELETE":
+            if sql_start.startswith(("DROP ", "ALTER ")):
+                self.app.delete_backup = False
+                self.app.conn.commit()
+            if sql_start.startswith("DELETE"):
                 self.ui.label.setText(str(cur.rowcount) + _(" rows deleted"))
                 self.app.delete_backup = False
                 self.app.conn.commit()
                 self._emit_project_table_changes(self._tables_written_by(self.sql))
-            if self.sql[0:6].upper() == "UPDATE":
+            if sql_start.startswith("UPDATE"):
                 self.ui.label.setText(str(cur.rowcount) + _(" rows updated"))
+                self.app.delete_backup = False
+                self.app.conn.commit()
+                self._emit_project_table_changes(self._tables_written_by(self.sql))
+            if sql_start.startswith(("INSERT", "REPLACE")):
+                self.ui.label.setText(str(cur.rowcount) + _(" rows inserted"))
                 self.app.delete_backup = False
                 self.app.conn.commit()
                 self._emit_project_table_changes(self._tables_written_by(self.sql))
