@@ -1569,8 +1569,37 @@ class App(object):
             return msg, backup
         msg += _("Project backup created: ") + backup
         # Delete backup path - delete the backup if no changes occurred in the project during the session
-        self.delete_backup_path_name = backup
+        # Suffixed backups (e.g. pre-merge) are always kept and do not replace the opening backup here
+        if suffix == "":
+            self.delete_backup_path_name = backup
         return msg, backup
+
+    @staticmethod
+    def read_database_change_counter(database_path):
+        """ Read the SQLite file change counter, which increases with every committed change.
+        Returns:
+            Integer, or None if the file cannot be read or is in WAL mode (counter not reliable) """
+
+        try:
+            with open(database_path, 'rb') as database_file:
+                header = database_file.read(28)
+        except OSError:
+            return None
+        if len(header) < 28 or header[0:16] != b'SQLite format 3\x00' or 2 in (header[18], header[19]):
+            return None
+        return int.from_bytes(header[24:28], 'big')
+
+    def project_changed_since_opening_backup(self):
+        """ Compare data.qda with its copy in the opening backup.
+        Catches changes made by modules that do not set delete_backup.
+        Returns:
+            True if changed, or if it cannot be verified """
+
+        project_counter = self.read_database_change_counter(Path(self.project_path) / 'data.qda')
+        backup_counter = self.read_database_change_counter(Path(self.delete_backup_path_name) / 'data.qda')
+        if project_counter is None or backup_counter is None:
+            return True
+        return project_counter != backup_counter
 
     def help_wiki(self, page_path: str):
         """ Open website doc help page in https://qualcoder.org.
