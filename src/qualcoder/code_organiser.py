@@ -42,6 +42,7 @@ from .GUI.ui_dialog_organiser import Ui_DialogOrganiser
 from .helpers import ExportDirectoryPathDialog, Message
 from .memo import DialogMemo
 from .select_items import DialogSelectItems
+from .view_graph_appearance import NODE_CORNER_RADIUS, CodeColorMixin, NodeLayoutMixin
 
 path = os.path.abspath(os.path.dirname(__file__))
 logger = logging.getLogger(__name__)  # was commented out
@@ -51,7 +52,7 @@ model = []
 update_graphics_item_models = False
 
 
-class CodeOrganiser(QDialog):
+class CodeOrganiser(NodeLayoutMixin, CodeColorMixin, QDialog):
     """ Dialog to organise code and categories in an acyclic graph.
     Add new categories, move codes and categories to other categories.
     Merge codes and categories
@@ -99,6 +100,8 @@ class CodeOrganiser(QDialog):
         self.ui.pushButton_create_code.pressed.connect(self.create_code)
         self.ui.pushButton_import_codebook.setIcon(qta.icon('mdi6.book-arrow-down-outline', options=[{'scale_factor': 1.3}]))
         self.ui.pushButton_import_codebook.pressed.connect(self.import_codebook)
+        # organization models from the graph (view_graph_appearance)
+        self._setup_organize_button(self.ui.pushButton_org_graph, icon_scale=1.3)
         self.show_frequencies = False  # [n] coding frequency labels
 
         # Set the scene
@@ -139,6 +142,27 @@ class CodeOrganiser(QDialog):
                   "Potential for unexpected errors could occur.\n"
                   "THERE IS NO UNDO OPTION AFTER APPLYING CHANGES WITH THE APPLY BUTTON.")
         Message(self.app, "Code organiser", text_).exec()
+
+    # --- organization models and code colors from view_graph_appearance 2026-11-13 ---
+    def _organize_collect(self):
+        """ Code and category nodes with their hierarchy lines. """
+
+        nodes = [i for i in self.scene.items() if isinstance(i, TextGraphicsItem) and i.isVisible()]
+        links = [i for i in self.scene.items() if isinstance(i, LinkGraphicsItem)]
+        return nodes, links
+
+    def _after_layout_change(self):
+        self.scene.update_scene_bounds()
+        self.fit_and_center_view()
+
+    def _store_codes_color(self, cids, color):
+        """ Kept in the model until Apply, like every other change in the organiser. """
+
+        global model  # noqa: F824
+        for item in model:
+            if item.get('cid') in cids and item.get('name', '') != "":
+                item['color'] = color
+        return True
 
     def _emit_project_table_changes(self, tables):
         """Notify other open dialogs about changed project tables."""
@@ -213,7 +237,7 @@ class CodeOrganiser(QDialog):
                 else ('cat', item['original_catid'])
             self._initial_model[key] = {
                 'name': item['name'], 'memo': item['memo'], 'catid': item['catid'],
-                'supercatid': item['supercatid'], 'supercid': item.get('supercid')}
+                'supercatid': item['supercatid'], 'supercid': item.get('supercid'), 'color': item.get('color')}
         # keep the button ENABLED so the user can switch to another branch
         self.ui.pushButton_selectbranch.setToolTip(_("Select a different code tree branch"))
         self.ui.pushButton_apply.setEnabled(True)
@@ -496,6 +520,10 @@ class CodeOrganiser(QDialog):
         if key == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
             self._begin_space_pan()
             return
+        # F5 changes the color of the selected codes, as in the code tree and the graph
+        if key == QtCore.Qt.Key.Key_F5:
+            self.change_codes_color(self.scene.selectedItems())
+            return
         if key == QtCore.Qt.Key.Key_Plus or key == QtCore.Qt.Key.Key_W:
             if self.ui.graphicsView.transform().isScaling() and self.ui.graphicsView.transform().determinant() > 10:
                 return
@@ -686,8 +714,12 @@ class CodeOrganiser(QDialog):
         freq_text = _("Hide frequencies") if self.show_frequencies else _("Show frequencies")
         action_frequencies = menu.addAction(freq_text)
         menu.addSeparator()
+        action_organize = menu.addAction(_("Organize graph"))
         action_fit_center = menu.addAction(_("Fit and center view"))
         action = menu.exec(self.ui.graphicsView.mapToGlobal(position))
+        if action == action_organize:
+            self.open_organization_menu()
+            return
         if action == action_fit_center:
             self.fit_and_center_view()
             return
@@ -1475,6 +1507,9 @@ class CodeOrganiser(QDialog):
             # Memo edits
             if item['memo'] != snap['memo']:
                 changes.append(_("Memo updated: ") + f"'{item['name'].strip()}'")
+            # Color edits (F5 or the context menu)
+            if is_code and 'color' in snap and item.get('color') != snap['color']:
+                changes.append(_("Color changed: ") + f"'{item['name'].strip()}'")
             # Re-parenting. report ONE line describing the move, using the
             # correct wording for each parent type (a category's parent is "top level",
             # not "(no category)"), and folding a code's catid + supercid change (e.g.
@@ -1660,8 +1695,9 @@ class CodeOrganiser(QDialog):
                     # sub-code. If it has a category now, clear supercid; otherwise preserve the
                     # code's existing parent code (supercid).
                     new_supercid = None if item['catid'] is not None else item.get('original_supercid')
-                    cur.execute("update code_name set name=?, memo=?, catid=?, supercid=? where cid=?",
-                                [code_name, item['memo'], item['catid'], new_supercid, item['cid']])
+                    cur.execute("update code_name set name=?, memo=?, catid=?, supercid=?, color=? where cid=?",
+                                [code_name, item['memo'], item['catid'], new_supercid, item.get('color'),
+                                 item['cid']])
 
             # Update merged codes: coded text, images and A/V. Using new cid and original_cid
             for item in model:
@@ -2156,7 +2192,9 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         painter.save()
         color = QtGui.QColor(self.code_or_cat['color'])
         painter.setBrush(QtGui.QBrush(color, style=QtCore.Qt.BrushStyle.SolidPattern))
-        painter.drawRect(self.boundingRect())
+        # rounded corners, as the graph nodes
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.drawRoundedRect(self.boundingRect(), NODE_CORNER_RADIUS, NODE_CORNER_RADIUS)
         painter.restore()
         super().paint(painter, option, widget)
 
@@ -2216,6 +2254,10 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             add_code_action = menu.addAction(_('Add code to category'))
         memo_action = menu.addAction(_('Memo'))
         rename_action = menu.addAction(_('Rename'))
+        color_action = None
+        if self.code_or_cat['cid'] is not None:
+            color_action = menu.addAction(_("Change code color"))
+            color_action.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F5))
         if self.code_or_cat['memo'] != "":
             show_memo_action = menu.addAction(_("Display memo"))
         # deletion from the canvas (model only; the database is written on Apply)
@@ -2242,6 +2284,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             self.update_memo()
         if action == rename_action:
             self.update_name()
+        if action == color_action:
+            self.scene().parent.change_codes_color([self])
         # Codes
         if action == coded_action:
             self.coded_media()
@@ -2313,6 +2357,10 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             link_codes_under_code_action = menu.addAction(_('Link codes under code'))
         if cat_items:
             link_categories_under_category_action = menu.addAction(_('Link categories under category'))
+        color_action = None
+        if code_items:
+            color_action = menu.addAction(_("Change color of selected codes"))
+            color_action.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F5))
         menu.addSeparator()
         if code_items:
             delete_codes_action = menu.addAction(_('Delete codes'))
@@ -2328,6 +2376,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             self.multi_link_codes_under_code(code_items)
         elif action == link_categories_under_category_action:
             self.multi_link_categories_under_category(cat_items)
+        elif action == color_action:
+            self.scene().parent.change_codes_color(code_items)
         elif action == delete_codes_action:
             self.multi_delete_codes(code_items)
         elif action == delete_categories_action:

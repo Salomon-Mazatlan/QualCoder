@@ -43,8 +43,11 @@ from .memo import DialogMemo
 from .save_sql_query import DialogSaveSql
 from .select_items import DialogSelectItems
 # new modules 
-from .view_graph_relations import DialogNodeRelations
+from .view_graph_relations import DialogNodeRelations, load_relations
 from .view_graph_models import DialogGraphModels
+from .view_graph_appearance import (GraphAppearanceMixin, GraphLayoutMixin, NODE_FONT_SIZES, NODE_SHAPES,
+                                    NodeShapeMixin, ON_CANVAS_TEXT_COLOR, SIZE_MODES, add_appearance_submenus,
+                                    paint_text_halo)
 # ODF imports for the analytical graph summary export (.odt)
 from odf.opendocument import OpenDocumentText
 from odf.text import P, H, Span
@@ -72,6 +75,138 @@ COLORS_HEX = {"red": "#FF0000", "green": "#00FF00", "cyan": "#00FFFF",
 _MEMO_LINE_ID_OFFSET = 1_000_000_000
 
 
+def table_has_columns(conn, table, columns):
+    """ True when every column exists, so older databases (before v18) still save and load. """
+    try:
+        cur = conn.cursor()
+        cur.execute(f"pragma table_info({table})")
+        existing = {row[1] for row in cur.fetchall()}
+    except sqlite3.Error:
+        return False
+    return all(column in existing for column in columns)
+
+
+# appearance columns added in database v18, by table
+GRAPH_V18_COLUMNS = {
+    "graph": ("node_shape", "node_size_mode", "line_width_mode"),
+    "gr_cdct_text_item": ("shape", "size_mode", "text_width"),
+    "gr_cdct_line_item": ("width_mode",),
+    "gr_case_text_item": ("text_width",),
+    "gr_file_text_item": ("text_width",),
+    "gr_free_text_item": ("text_width",),
+    "gr_memo_item": ("text_width",),
+    "gr_pix_item": ("display_width",),
+}
+
+
+def graph_v18_tables(conn):
+    """ {table: True} for the graph tables that already have their v18 columns. """
+    return {table: table_has_columns(conn, table, columns) for table, columns in GRAPH_V18_COLUMNS.items()}
+
+
+def save_v18_columns(cur, table, values, available):
+    """ Write the v18 columns of the row just inserted, when the database has them. """
+    if not available.get(table):
+        return
+    assignments = ", ".join(f"{column}=?" for column in values)
+    cur.execute(f"update {table} set {assignments} where rowid=last_insert_rowid()", list(values.values()))
+
+
+def node_anchor(widget):
+    """ Scene rect where lines attach and whether it is round: the circle of circle nodes, else the node. """
+    # runs for both ends of every line on every drag frame, so read the shape attribute directly
+    shape = getattr(widget, '_node_shape', None)
+    if shape == "circle":
+        return widget.mapRectToScene(widget.circle_rect()), True
+    return widget.sceneBoundingRect(), shape == "ellipse"
+
+
+# --- lines keep clear of the name under circle nodes 2026-11-12 ---
+LABEL_CLEARANCE = 3
+
+
+def ray_exit_distance(origin, direction, rect):
+    """ Distance along a unit ray from origin to where it leaves rect, or None when it misses it. """
+    t_enter, t_exit = -math.inf, math.inf
+    for start, step, low, high in ((origin.x(), direction.x(), rect.left(), rect.right()),
+                                   (origin.y(), direction.y(), rect.top(), rect.bottom())):
+        if abs(step) < 1e-9:
+            if start < low or start > high:
+                return None
+            continue
+        t1, t2 = (low - start) / step, (high - start) / step
+        t_enter, t_exit = max(t_enter, min(t1, t2)), min(t_exit, max(t1, t2))
+    if t_exit < max(t_enter, 0):
+        return None
+    return t_exit
+
+
+def clear_of_label(widget, center, edge_point):
+    """ Move a line end past the name of a circle node when the line would cross it. """
+    if getattr(widget, '_node_shape', None) != "circle":
+        return edge_point
+    # the name sits below the circle, so lines leaving upwards or sideways never cross it
+    if edge_point.y() <= center.y():
+        return edge_point
+    label = widget.label_rect()
+    if label.isEmpty():
+        return edge_point
+    label = widget.mapRectToScene(label).adjusted(-LABEL_CLEARANCE, -LABEL_CLEARANCE,
+                                                  LABEL_CLEARANCE, LABEL_CLEARANCE)
+    edge_vector = edge_point - center
+    edge_distance = math.hypot(edge_vector.x(), edge_vector.y())
+    if edge_distance == 0:
+        return edge_point
+    direction = edge_vector / edge_distance
+    exit_distance = ray_exit_distance(center, direction, label)
+    if exit_distance is None or exit_distance <= edge_distance:
+        return edge_point
+    return center + direction * exit_distance
+
+
+def cached_line_end_points(line):
+    """ line_end_points of a line, reused while neither node moved, resized or changed shape.
+    The scene redraws every line on each mouse move of a drag, so most lines find nothing changed. """
+    a, b = line.from_widget, line.to_widget
+    key = (a.sceneBoundingRect(), b.sceneBoundingRect(),
+           getattr(a, '_shape_version', 0), getattr(b, '_shape_version', 0))
+    cached = getattr(line, '_ends_cache', None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    ends = line_end_points(a, b)
+    line._ends_cache = (key, ends)
+    return ends
+
+
+def line_end_points(from_widget, to_widget):
+    """ Both ends of a line between two nodes, outside the shapes and clear of circle node names. """
+    rect1, is_round1 = node_anchor(from_widget)
+    rect2, is_round2 = node_anchor(to_widget)
+    c1, c2 = rect1.center(), rect2.center()
+    if rect1.intersects(rect2):
+        return c1, c2
+    p1 = compute_edge_point(c1, c2, rect1, is_round1)
+    p2 = compute_edge_point(c2, c1, rect2, is_round2)
+    q1 = clear_of_label(from_widget, c1, p1)
+    q2 = clear_of_label(to_widget, c2, p2)
+    if q1 is p1 and q2 is p2:
+        return p1, p2
+    total = QtCore.QLineF(c1, c2).length()
+    # fall back to the shape edge on a side when clearing both names would leave no line
+    for end1, end2 in ((q1, q2), (q1, p2), (p1, q2)):
+        if QtCore.QLineF(c1, end1).length() + QtCore.QLineF(c2, end2).length() < total - 6:
+            return end1, end2
+    return p1, p2
+
+
+def positive_width_or_none(width):
+    """ Stored width value: None when the item uses its natural width. """
+    try:
+        return float(width) if width is not None and float(width) > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 # tolerant accessor for the colors dict (legacy/hex/misspelled values fall back safely)
 def safe_color(name):
     if name in colors:
@@ -95,9 +230,15 @@ def compute_edge_point(center_source, center_target, rect, is_ellipse):
     w = rect.width() / 2
     h = rect.height() / 2
     if is_ellipse:
+        # where the line to the other centre crosses the ellipse, so it keeps pointing at the centre
         angle = math.atan2(dy, dx)
-        return QtCore.QPointF(center_source.x() + w * math.cos(angle),
-                              center_source.y() + h * math.sin(angle))
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        denominator = math.hypot(h * cos_a, w * sin_a)
+        if denominator == 0:
+            return center_source
+        radius = w * h / denominator
+        return QtCore.QPointF(center_source.x() + radius * cos_a,
+                              center_source.y() + radius * sin_a)
     if dx == 0:
         return QtCore.QPointF(center_source.x(), center_source.y() + math.copysign(h, dy))
     if dy == 0:
@@ -309,19 +450,19 @@ def invoke_segment_cooc_toggle(scene_item):
 
 
 # call a ViewGraph method from any scene item (scene.parent, or up the view's widget chain)
-def invoke_graph_method(scene_item, method_name):
+def invoke_graph_method(scene_item, method_name, *args, **kwargs):
     scene = scene_item.scene()
     if scene is None:
         return False
     parent = getattr(scene, 'parent', None)
     if parent is not None and hasattr(parent, method_name):
-        getattr(parent, method_name)()
+        getattr(parent, method_name)(*args, **kwargs)
         return True
     if scene.views():
         widget = scene.views()[0].parent()
         while widget is not None:
             if hasattr(widget, method_name):
-                getattr(widget, method_name)()
+                getattr(widget, method_name)(*args, **kwargs)
                 return True
             widget = widget.parent()
     return False
@@ -388,6 +529,14 @@ def detach_line_label(line_item):
         line_item._label_bg = None
 
 
+class LineLabelItem(QtWidgets.QGraphicsTextItem):
+    """ Relation label drawn with a halo instead of a white box, so crossing lines stay visible. """
+
+    def paint(self, painter, option, widget=None):
+        paint_text_halo(painter, self)
+        super().paint(painter, option, widget)
+
+
 def build_line_label(line_item, label=None):
     """ Shared implementation of _create_label_item for FreeLineGraphicsItem and
     LinkGraphicsItem: create, update or remove the top-level italic label.
@@ -410,7 +559,7 @@ def build_line_label(line_item, label=None):
     # Translate at display time only: the DB stores the canonical English name, so
     # the graph follows the interface language and custom labels pass through
     # unchanged (gettext returns the string as-is when no translation exists).
-    ti = QtWidgets.QGraphicsTextItem(_(line_item.label))
+    ti = LineLabelItem(_(line_item.label))
     ti._is_line_label = True  # marker for the anti-overlap positioner
     font = QtGui.QFont()
     font.setPointSize(9)
@@ -421,7 +570,7 @@ def build_line_label(line_item, label=None):
     ti.setDefaultTextColor(QtGui.QColor("#0000CD"))
     ti.setZValue(5)  # above nodes (z=0), below handles (z=10)
     line_item.text_item = ti
-    line_item._label_bg = None  # (re)built by position_line_label
+    line_item._label_bg = None
     return ti
 
 
@@ -487,18 +636,8 @@ def position_line_label(line_item, p1, p2):
                 break
     mid_x = p1.x() + dx * best_t
     mid_y = p1.y() + dy * best_t
-    # top-level item: position directly in scene coordinates
+    # top-level item: position directly in scene coordinates; the label paints its own halo
     ti.setPos(mid_x - br.width() / 2, mid_y - br.height() / 2)
-    if not hasattr(line_item, '_label_bg') or line_item._label_bg is None:
-        bg = QtWidgets.QGraphicsRectItem(ti)  # child of the text item
-        # a child is drawn ON TOP of its parent regardless of zValue unless
-        # ItemStacksBehindParent is set; without it the white chip covered the text
-        bg.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemStacksBehindParent, True)
-        bg.setBrush(QtGui.QBrush(QtGui.QColor(255, 255, 255, 235)))
-        bg.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))  # no border on the chip
-        line_item._label_bg = bg
-    # padded chip in the text item's local coordinates
-    line_item._label_bg.setRect(br.adjusted(-4, -1, 4, 1))
 
 
 # shared handle-sync logic for every node class with per-item handles.
@@ -729,6 +868,7 @@ class GraphSynchronizer:
                 self._sync_saved_graph_metadata()
             self._refresh_scene_items()
             self._sync_lines_and_relations()
+            self.vg.update_frequency_appearance()
             if self.vg.show_frequencies:
                 # Recount labels directly; toggling would consume an undo level
                 self.vg._apply_frequency_labels()
@@ -1550,7 +1690,7 @@ class DialogSelectCodedSegments(QDialog):
         self.accept()
 
 
-class ViewGraph(QDialog):
+class ViewGraph(GraphAppearanceMixin, GraphLayoutMixin, QDialog):
     """ Dialog to view code and categories in an acyclic graph. Provides options for
     colors and amount of nodes to display (based on category selection).
     """
@@ -1626,27 +1766,12 @@ class ViewGraph(QDialog):
         # Graph Models dialog (analytical model generators)
         self.ui.pushButton_graph_models.setIcon(qta.icon('mdi6.hubspot', options=[{'scale_factor': 1.4}]))
         self.ui.pushButton_graph_models.pressed.connect(self.open_graph_models)
-        # Organize graph dialog (radial / hierarchical / LR / RL)
-        self.ui.pushButton_org_graph.setIcon(qta.icon('mdi6.auto-fix', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_org_graph.pressed.connect(self.open_organization_menu)
         # Minimap toggle (checkable, syncs both directions via _on_minimap_toggled)
         self.ui.pushButton_minimap.setIcon(qta.icon('mdi6.picture-in-picture-bottom-right', options=[{'scale_factor': 1.4}]))
         self.ui.pushButton_minimap.setCheckable(True)
         self.ui.pushButton_minimap.toggled.connect(self._on_minimap_toggled)
-        # alignment and distribution of selected nodes
-        self.ui.pushButton_align_vertical.setIcon(qta.icon('mdi6.align-vertical-center', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_align_vertical.pressed.connect(lambda: self.align_selected("vertical"))
-        self.ui.pushButton_align_horizontal.setIcon(qta.icon('mdi6.align-horizontal-center', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_align_horizontal.pressed.connect(lambda: self.align_selected("horizontal"))
-        self.ui.pushButton_distribute_vertical.setIcon(qta.icon('mdi6.distribute-vertical-center', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_distribute_vertical.pressed.connect(lambda: self.distribute_selected("vertical"))
-        self.ui.pushButton_distribute_horizontal.setIcon(qta.icon('mdi6.distribute-horizontal-center', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_distribute_horizontal.pressed.connect(lambda: self.distribute_selected("horizontal"))
-        # scale graph (expand / compact)
-        self.ui.pushButton_expand_graph.setIcon(qta.icon('mdi6.arrow-expand-all', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_expand_graph.pressed.connect(lambda: self._scale_graph(1.10))
-        self.ui.pushButton_compact_graph.setIcon(qta.icon('mdi6.arrow-collapse-all', options=[{'scale_factor': 1.4}]))
-        self.ui.pushButton_compact_graph.pressed.connect(lambda: self._scale_graph(0.90))
+        # organize, align, distribute, expand and compact (view_graph_appearance)
+        self._setup_layout_buttons()
         # remove selected nodes (with their connected lines)
         self.ui.pushButton_remove_nodes.setIcon(qta.icon('mdi6.delete-outline', options=[{'scale_factor': 1.4}]))
         self.ui.pushButton_remove_nodes.pressed.connect(self.remove_selected_nodes)
@@ -1659,6 +1784,9 @@ class ViewGraph(QDialog):
         self.ui.pushButton_undo_changes.setIcon(qta.icon('mdi6.undo', options=[{'scale_factor': 1.4}]))
         self.ui.pushButton_undo_changes.pressed.connect(self.undo_last_change)
         self.ui.pushButton_undo_changes.setToolTip(_("Undo last change"))
+        # node shape, frequency sizes and hierarchy line widths (view_graph_appearance)
+        self._setup_appearance_button()
+        self._setup_quick_relations()
 
         # Set the scene
         # pass self as parent so GraphicsScene.parent points to this dialog,
@@ -1771,7 +1899,8 @@ class ViewGraph(QDialog):
         Stores positions, visibility, visual properties and structural attributes
         of every node and line so undo can fully revert any kind of change. """
 
-        snapshot = {'nodes': [], 'lines': []}
+        snapshot = {'nodes': [], 'lines': [],
+                    'graph_style': (self.graph_node_shape, self.graph_size_mode, self.graph_line_mode)}
         for item in self.scene.items():
             cls_name = type(item).__name__
             # Nodes
@@ -1787,7 +1916,7 @@ class ViewGraph(QDialog):
                 }
                 if hasattr(item, 'code_or_cat') and item.code_or_cat is not None:
                     node_data['code_or_cat'] = deepcopy(item.code_or_cat)
-                for attr in ('text', 'color', 'font_size', 'bold', 'is_ellipse',
+                for attr in ('text', 'color', 'font_size', 'bold', 'node_shape', 'size_mode',
                              'is_collapsed', 'show_attributes'):
                     if hasattr(item, attr):
                         try:
@@ -1820,7 +1949,7 @@ class ViewGraph(QDialog):
                         'in_scene': item.scene() == self.scene,
                     }
                     for attr in ('color', 'line_width', 'line_type', 'arrow_mode',
-                                 'label', '_is_cooc_line'):
+                                 'label', '_is_cooc_line', 'width_mode'):
                         if hasattr(item, attr):
                             try:
                                 line_data[attr] = getattr(item, attr)
@@ -1847,6 +1976,8 @@ class ViewGraph(QDialog):
                     value = [(k, value.get(k)) for k in ('cid', 'catid', 'supercid', 'supercatid', 'name')]
                 entry.append((key, repr(value)))
             entries.append(tuple(entry))
+        if entries:
+            entries.append((('graph_style', repr(snapshot.get('graph_style'))),))
         return sorted(entries)
 
     def _mark_graph_saved(self):
@@ -1870,6 +2001,8 @@ class ViewGraph(QDialog):
             Message(self.app, _("Nothing to undo"), _("No previous changes to undo.")).exec()
             return
         snapshot = self._undo_stack.pop()
+        if snapshot.get('graph_style'):
+            self.graph_node_shape, self.graph_size_mode, self.graph_line_mode = snapshot['graph_style']
 
         def _is_alive(_it):
             if _it is None:
@@ -1923,7 +2056,13 @@ class ViewGraph(QDialog):
                     item.hide()
                 if 'code_or_cat' in node_data and hasattr(item, 'code_or_cat'):
                     item.code_or_cat = node_data['code_or_cat']
-                for attr in ('text', 'color', 'font_size', 'bold', 'is_ellipse',
+                    # code colors live in the project, not in the graph history
+                    if isinstance(item, TextGraphicsItem) and item.code_or_cat.get('cid') is not None:
+                        for code in self.codes:
+                            if code['cid'] == item.code_or_cat['cid']:
+                                item.code_or_cat['color'] = code['color']
+                                break
+                for attr in ('text', 'color', 'font_size', 'bold', 'node_shape', 'size_mode',
                              'is_collapsed', 'show_attributes'):
                     if attr in node_data and hasattr(item, attr):
                         try:
@@ -2010,6 +2149,8 @@ class ViewGraph(QDialog):
                             pass
                 if '_is_cooc_line' in line_data:
                     item._is_cooc_line = line_data['_is_cooc_line']
+                if 'width_mode' in line_data:
+                    item.width_mode = line_data['width_mode']
                 if hasattr(item, 'redraw'):
                     item.redraw()
             except RuntimeError:
@@ -2212,32 +2353,6 @@ class ViewGraph(QDialog):
             add_cooccurrence_line(self.scene, nodes_by_cid[cid_a], nodes_by_cid[cid_b], count)
         self.scene.update()
         self._refresh_minimap()
-
-    def open_organization_menu(self):
-        """ Single dialog dispatching to the four organize_* layouts. """
-
-        models = [
-            {'name': _("Radial"), 'id': 'radial'},
-            {'name': _("Top to Bottom"), 'id': 'hierarchical'},
-            {'name': _("Left to Right"), 'id': 'lr'},
-            {'name': _("Right to Left"), 'id': 'rl'},
-        ]
-        ui = DialogSelectItems(self.app, models, _("Select organization model"), "single")
-        if not ui.exec():
-            return
-        selected = ui.get_selected()
-        if not selected:
-            return
-        self._save_undo_state()
-        dispatch = {
-            'radial':       self.organize_radially,
-            'hierarchical': self.organize_hierarchically,
-            'lr':           lambda: self.organize_horizontal("LR"),
-            'rl':           lambda: self.organize_horizontal("RL"),
-        }
-        fn = dispatch.get(selected['id'])
-        if fn:
-            fn()
 
     def open_graph_models(self):
         """ Open the Graph Models dialog and refresh the view afterwards. """
@@ -2619,7 +2734,8 @@ class ViewGraph(QDialog):
 
     def keyPressEvent(self, event):
         """ Plus, W to zoom in. Minus, Q to zoom out. Space for panning.
-        Delete / Backspace remove selected nodes. Ctrl+Z undoes last change. """
+        Delete / Backspace remove selected nodes. Ctrl+Z undoes last change.
+        F5 changes the color of the selected codes. """
 
         key = event.key()
         modifiers = event.modifiers()
@@ -2637,6 +2753,10 @@ class ViewGraph(QDialog):
         # Ctrl+Z for undo
         if key == QtCore.Qt.Key.Key_Z and modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
             self.undo_last_change()
+            return
+        # F5 changes the color of the selected codes, as in the code tree
+        if key == QtCore.Qt.Key.Key_F5:
+            self.change_codes_color(self.scene.selectedItems())
             return
         if key == QtCore.Qt.Key.Key_Plus or key == QtCore.Qt.Key.Key_W:
             if self.ui.graphicsView.transform().isScaling() and self.ui.graphicsView.transform().determinant() > 10:
@@ -2878,7 +2998,8 @@ class ViewGraph(QDialog):
     def multi_selection_menu(self, position):
         """ Reduced context menu for multi-selection.
         With 2 or more node items selected: "Connect to..." plus appearance
-        options (Bold toggle and Font size) applied to every selected node.
+        options (Bold toggle, Font size, node shape, size and line width modes, code color)
+        applied to every selected node of the matching type.
         Returns True when the reduced menu was shown (handled), False otherwise. """
 
         node_types = (TextGraphicsItem, FreeTextGraphicsItem, CaseTextGraphicsItem,
@@ -2904,11 +3025,25 @@ class ViewGraph(QDialog):
         for size in [8, 10, 12, 14, 16, 18]:
             act = font_size_menu.addAction(str(size))
             font_size_actions[act] = size
+        # shape, size and line width modes for the code and category nodes of the selection
+        code_cat_nodes = [n for n in selected_nodes if isinstance(n, TextGraphicsItem)]
+        appearance_actions = add_appearance_submenus(menu, code_cat_nodes) if code_cat_nodes else {}
+        action_color = None
+        if code_nodes:
+            menu.addSeparator()
+            action_color = menu.addAction(_("Change color of selected codes"))
+            action_color.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F5))
         action = menu.exec(self.ui.graphicsView.mapToGlobal(position))
         if action is None:
             return True
         if action == action_connect_to:
             self.connect_selected_to_node(selected_nodes)
+            return True
+        if action in appearance_actions:
+            self.apply_node_appearance(code_cat_nodes, **appearance_actions[action])
+            return True
+        if action_color is not None and action == action_color:
+            self.change_codes_color(code_nodes)
             return True
         if action_cooc_segments is not None and action == action_cooc_segments:
             self.add_cooccurring_segments(code_nodes)
@@ -2959,34 +3094,144 @@ class ViewGraph(QDialog):
         self.add_segment_cooccurrence_lines(imported, code_nodes)
         self.finalize_graph_operation(fit_view=False)
 
-    def apply_appearance_to_nodes(self, nodes, toggle_bold=False, font_size=None):
-        """ Apply Bold / Font size to every text node in nodes,
-        mirroring the per-item context menu behavior (item.bold + item.font_size
-        + setFont). Bold on a mixed selection unifies: if any node is not bold,
-        all become bold; if all are bold, all become normal. """
+    # --- quick relations 2026-11-11 ---
+    def _setup_quick_relations(self):
+        """ Quick relations checkbox, kept in config.ini with the last framework used. """
 
-        text_nodes = [n for n in nodes if hasattr(n, 'setFont')
-                      and (hasattr(n, 'bold') or hasattr(n, 'font_size'))]
-        if not text_nodes:
+        self.ui.checkBox_quick_relations.setIcon(
+            qta.icon('mdi6.lightning-bolt-outline', options=[{'scale_factor': 1.4}]))
+        self.ui.checkBox_quick_relations.setIconSize(self.ui.pushButton_reveal.iconSize())
+        self.ui.checkBox_quick_relations.setToolTip(
+            _("Quick relations: choose the relation from a menu instead of the relations dialog"))
+        self._framework_keys = list(load_relations(self.app.settings).keys())
+        saved = self.app.settings.get('graph_relations_framework', '')
+        if saved in self._framework_keys:
+            DialogNodeRelations._last_framework_name = saved
+        self._fit_header_widget_width(self.ui.checkBox_quick_relations)
+        self.ui.checkBox_quick_relations.setChecked(
+            str(self.app.settings.get('graph_quick_relations', 'False')) == 'True')
+        self.ui.checkBox_quick_relations.toggled.connect(self._on_quick_relations_toggled)
+
+    def _fit_header_widget_width(self, widget):
+        """ Widen a header widget to its text, longer in some languages, and move the buttons after it. """
+
+        widget.ensurePolished()
+        extra = widget.sizeHint().width() - widget.width()
+        if extra <= 0:
             return
-        self._save_undo_state()
-        new_bold = None
-        if toggle_bold:
-            new_bold = any(not getattr(n, 'bold', False) for n in text_nodes)
-        for node in text_nodes:
-            if new_bold is not None and hasattr(node, 'bold'):
-                node.bold = new_bold
-            if font_size is not None and hasattr(node, 'font_size'):
-                node.font_size = font_size
-            size = getattr(node, 'font_size', 9) or 9
-            weight = QtGui.QFont.Weight.Bold if getattr(node, 'bold', False) \
-                else QtGui.QFont.Weight.Normal
+        right_edge = widget.geometry().right()
+        for child in self.ui.groupBox_header.findChildren(
+                QtWidgets.QWidget, options=QtCore.Qt.FindChildOption.FindDirectChildrenOnly):
+            if child is not widget and child.x() > right_edge:
+                child.move(child.x() + extra, child.y())
+        widget.resize(widget.width() + extra, widget.height())
+
+    def _store_graph_setting(self, key, value):
+        """ Keep a graph preference in config.ini. """
+
+        self.app.settings[key] = value
+        if hasattr(self.app, 'write_config_ini') and hasattr(self.app, 'ai_models'):
             try:
-                node.setFont(QtGui.QFont(self.app.settings['font'], size, weight))
-            except Exception:
-                continue
-        # bounding rects changed: redraw lines, labels, minimap
-        self.finalize_graph_operation(fit_view=False)
+                self.app.write_config_ini(self.app.settings, self.app.ai_models)
+            except (OSError, ValueError) as err:
+                logger.warning(f"Could not save {key}: {err}")
+
+    def _on_quick_relations_toggled(self, checked):
+        self._store_graph_setting('graph_quick_relations', 'True' if checked else 'False')
+
+    def _current_framework_key(self):
+        """ Framework last chosen in the quick menu or the relations dialog. """
+
+        key = DialogNodeRelations._last_framework_name
+        if key in self._framework_keys:
+            return key
+        return self._framework_keys[0] if self._framework_keys else None
+
+    def _set_relations_framework(self, key):
+        """ Share the framework with the relations dialog and keep it in config.ini. """
+
+        if key not in self._framework_keys:
+            return
+        DialogNodeRelations._last_framework_name = key
+        if self.app.settings.get('graph_relations_framework') != key:
+            self._store_graph_setting('graph_relations_framework', key)
+
+    def select_relation(self):
+        """ Relation for new lines: quick menu when enabled, otherwise the relations dialog.
+        Returns (color, label, line_type, arrow_mode), or None when cancelled. """
+
+        if self.ui.checkBox_quick_relations.isChecked():
+            position = QtGui.QCursor.pos()
+            while True:
+                kind, value = self._quick_relation_menu(position)
+                if kind is None:
+                    return None
+                if kind == "framework":
+                    self._set_relations_framework(value)
+                    continue  # show the relations of the new framework
+                if kind == "relation":
+                    line_type, arrow_mode = self._resolve_line_type_key("solid_arrow")
+                    return "gray", "" if value == "(No label)" else value, line_type, arrow_mode
+                break  # open the relations dialog
+        ui = DialogNodeRelations(self.app, self)
+        accepted = ui.exec()
+        self._set_relations_framework(DialogNodeRelations._last_framework_name)
+        if not accepted:
+            return None
+        line_type, arrow_mode = self._resolve_line_type_key(ui.selected_line_type)
+        return ui.selected_color, ui.selected_relation, line_type, arrow_mode
+
+    def _quick_relation_menu(self, position):
+        """ Relations of the current framework as a menu, a framework submenu and the dialog.
+        Returns (kind, value): ('relation', name), ('framework', key), ('dialog', None) or (None, None). """
+
+        frameworks = load_relations(self.app.settings)
+        key = self._current_framework_key()
+        menu = QtWidgets.QMenu(self)
+        menu.setStyleSheet("QMenu {font-size:" + str(self.app.settings['fontsize']) + "pt} ")
+        menu.setToolTipsVisible(True)
+        # "&" would be read as a keyboard shortcut marker in menu texts
+        header = menu.addAction((_(key) if key else _("Relations")).replace("&", "&&"))
+        header.setEnabled(False)
+        menu.addSeparator()
+        relation_actions = {}
+        for relation in frameworks.get(key, {}).get("relations", []):
+            name = relation.get("name", "")
+            act = menu.addAction(_(name).replace("&", "&&"))
+            if relation.get("definition"):
+                act.setToolTip(_(relation["definition"]))
+            relation_actions[act] = name
+        menu.addSeparator()
+        framework_menu = menu.addMenu(_("Framework"))
+        framework_actions = {}
+        for framework_key in frameworks:
+            framework_actions[framework_menu.addAction(_(framework_key).replace("&", "&&"))] = framework_key
+        menu.addSeparator()
+        dialog_action = menu.addAction(_("Open relations selector..."))
+        action = menu.exec(position)
+        if action in relation_actions:
+            return "relation", relation_actions[action]
+        if action in framework_actions:
+            return "framework", framework_actions[action]
+        if action is not None and action == dialog_action:
+            return "dialog", None
+        return None, None
+
+    def change_line_relation(self, line):
+        """ Replace label, color, line type and arrow of a relation line, from the quick menu or the dialog. """
+
+        relation = self.select_relation()
+        if relation is None:
+            return
+        color, label, line_type_str, arrow_mode_str = relation
+        self._save_undo_state()
+        line.color = color
+        line.label = label or ""
+        line.line_type = QtCore.Qt.PenStyle.DotLine if line_type_str == "dotted" else QtCore.Qt.PenStyle.SolidLine
+        line.arrow_mode = arrow_mode_str
+        line._create_label_item()
+        line.redraw()
+        self.scene.update()
 
     def connect_selected_to_node(self, selected_nodes):
         """ create relation lines from every selected node to ONE
@@ -3016,12 +3261,10 @@ class ViewGraph(QDialog):
             return
         target = chosen['item']
         # define the relation once, applied to every created line
-        ui_rel = DialogNodeRelations(self.app, self)
-        if not ui_rel.exec():
+        relation = self.select_relation()
+        if relation is None:
             return
-        color = ui_rel.selected_color
-        label = ui_rel.selected_relation
-        line_type_str, arrow_mode_str = self._resolve_line_type_key(ui_rel.selected_line_type)
+        color, label, line_type_str, arrow_mode_str = relation
         # snapshot before adding, so one undo reverts the whole batch
         self._save_undo_state()
         for node in selected_nodes:
@@ -3056,49 +3299,9 @@ class ViewGraph(QDialog):
     def _apply_frequency_labels(self):
         """ (re)compute and apply the [n] frequency suffixes on code and
         category nodes from the current self.codes/self.categories, WITHOUT touching
-        the undo stack. """
+        the undo stack. Code nodes show their own codings, categories the aggregate. """
 
-        cur = self.app.conn.cursor()
-        own_total = {}
-        for table in ("code_text", "code_image", "code_av"):
-            cur.execute(f"select cid, count(*) from {table} group by cid")
-            for cid_v, n in cur.fetchall():
-                own_total[cid_v] = own_total.get(cid_v, 0) + n
-        children_by_supercid = {}
-        codes_by_catid = {}
-        for code in self.codes:
-            sup = code.get('supercid')
-            if sup is not None:
-                children_by_supercid.setdefault(sup, []).append(code['cid'])
-            elif code.get('catid') is not None:
-                codes_by_catid.setdefault(code['catid'], []).append(code['cid'])
-        cat_children = {}
-        for cat in self.categories:
-            sup = cat.get('supercatid')
-            if sup is not None:
-                cat_children.setdefault(sup, []).append(cat['catid'])
-
-        def code_total(cid_v, guard=0):
-            """ Own codings plus all descendant sub-codes. Used ONLY for the
-            category aggregate; code nodes display own_total. """
-            total = own_total.get(cid_v, 0)
-            if guard > 50:
-                return total
-            for child in children_by_supercid.get(cid_v, []):
-                total += code_total(child, guard + 1)
-            return total
-
-        def category_total(catid_v, guard=0):
-            """ Aggregated totals of top codes across the category descendancy. """
-            total = 0
-            if guard > 50:
-                return total
-            for cid_v in codes_by_catid.get(catid_v, []):
-                total += code_total(cid_v)
-            for sub in cat_children.get(catid_v, []):
-                total += category_total(sub, guard + 1)
-            return total
-
+        own_total, _code_total, category_total, _project_total = self._coding_frequency_totals()
         for item in self.scene.items():
             if isinstance(item, TextGraphicsItem):
                 item.code_or_cat['child_names'] = self.named_children_of_node(item.code_or_cat)
@@ -3115,376 +3318,6 @@ class ViewGraph(QDialog):
                     item.text = base_name
                 item.setPlainText(item.text)
         self.scene.update()
-
-    def node_organize_rank(self, n):
-        """ Shared priority for the organization layouts.
-        Order: cases (0) < files (1) < supercategories (2, top-level categories)
-        < categories (3) < codes (4) < sub-codes (5) < everything else (6).
-        Used for root selection and sibling ordering in the three layouts. """
-
-        if isinstance(n, CaseTextGraphicsItem):
-            return 0
-        if isinstance(n, FileTextGraphicsItem):
-            return 1
-        if isinstance(n, TextGraphicsItem) and n.code_or_cat is not None:
-            if n.code_or_cat.get('cid') is None:
-                # category: top-level (no supercatid) outranks nested
-                return 2 if n.code_or_cat.get('supercatid') is None else 3
-            # code: plain code outranks sub-code (supercid)
-            return 5 if n.code_or_cat.get('supercid') is not None else 4
-        return 6
-
-    def organize_sort_key(self, n, adjacency):
-        """ Deterministic sort key for the organization layouts.
-        Priority rank first, then most connected, then alphabetical. """
-
-        return (self.node_organize_rank(n),
-                -len(adjacency.get(n, ())),
-                str(getattr(n, 'text', '')))
-
-    # --- organization layouts: shared forest and block packing (2026-11-02) ---
-    def _organize_collect(self):
-        """ Visible nodes plus all lines considered by the organization layouts. """
-
-        node_types = (TextGraphicsItem, FreeTextGraphicsItem, CaseTextGraphicsItem,
-                      FileTextGraphicsItem, PixmapGraphicsItem, AVGraphicsItem, MemoGraphicsItem)
-        nodes = []
-        links = []
-        for item in self.scene.items():
-            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
-                links.append(item)
-            elif isinstance(item, node_types) and item.isVisible():
-                nodes.append(item)
-        return nodes, links
-
-    @staticmethod
-    def _is_structural_link(link):
-        """ Hierarchy and case/file membership lines shape the trees; relations and co-occurrences do not. """
-
-        if isinstance(link, LinkGraphicsItem):
-            # co-occurrence links lose their flag on reload, so judge by the codes themselves
-            a, b = link.from_widget, link.to_widget
-            if getattr(link, '_is_cooc_line', False) or not isinstance(a, TextGraphicsItem) \
-                    or not isinstance(b, TextGraphicsItem):
-                return False
-            return is_parent_child(a, b) or is_parent_child(b, a)
-        member_types = (CaseTextGraphicsItem, FileTextGraphicsItem)
-        return isinstance(link.from_widget, member_types) or isinstance(link.to_widget, member_types)
-
-    def _organize_forest(self):
-        """ Spanning forest shared by the layouts.
-        1. One tree per structural component (hierarchy or case/file lines), so unrelated
-           branches never merge and a relation line cannot hang one branch under another.
-        2. Loose nodes linked by other lines (segments, memos, free text) join the nearest tree.
-        3. Whatever is left forms its own trees over any line.
-        Returns (nodes, links, roots, children). """
-
-        nodes, links = self._organize_collect()
-        node_set = set(nodes)
-        adjacency = {n: set() for n in nodes}
-        structural = {n: set() for n in nodes}
-        for link in links:
-            if not link.isVisible():
-                continue
-            u = getattr(link, 'from_widget', None)
-            v = getattr(link, 'to_widget', None)
-            if u is v or u not in node_set or v not in node_set:
-                continue
-            adjacency[u].add(v)
-            adjacency[v].add(u)
-            if self._is_structural_link(link):
-                structural[u].add(v)
-                structural[v].add(u)
-
-        def key(n):
-            return self.organize_sort_key(n, adjacency)
-
-        ordered = sorted(nodes, key=key)
-        children = {n: [] for n in nodes}
-        claimed = set()
-        roots = []
-
-        def grow(root, graph):
-            claimed.add(root)
-            order = [root]
-            i = 0
-            while i < len(order):
-                curr = order[i]
-                i += 1
-                for nb in sorted(graph[curr], key=key):
-                    if nb not in claimed:
-                        claimed.add(nb)
-                        children[curr].append(nb)
-                        order.append(nb)
-            return order
-
-        # first unclaimed node in priority order is always the best root of its component
-        tree_nodes = []
-        for n in ordered:
-            if structural[n] and n not in claimed:
-                roots.append(n)
-                tree_nodes.extend(grow(n, structural))
-
-        queue = list(tree_nodes)
-        i = 0
-        while i < len(queue):
-            curr = queue[i]
-            i += 1
-            for nb in sorted(adjacency[curr], key=key):
-                if nb not in claimed:
-                    claimed.add(nb)
-                    children[curr].append(nb)
-                    queue.append(nb)
-
-        for n in ordered:
-            if n not in claimed:
-                roots.append(n)
-                grow(n, adjacency)
-        return nodes, links, roots, children
-
-    @staticmethod
-    def _node_size(n):
-        if hasattr(n, 'boundingRect'):
-            r = n.boundingRect()
-            return r.width(), r.height()
-        return 100, 30
-
-    @staticmethod
-    def _shelf_offsets(sizes, axis, limit, gap):
-        """ Offsets that place boxes in rows (axis 'x') or columns (axis 'y'), wrapping at limit. """
-
-        offsets = []
-        main_pos = 0
-        cross_pos = 0
-        line_thickness = 0
-        for w, h in sizes:
-            main, cross = (w, h) if axis == 'x' else (h, w)
-            if main_pos > 0 and main_pos + main > limit:
-                cross_pos += line_thickness + gap
-                main_pos = 0
-                line_thickness = 0
-            offsets.append((main_pos, cross_pos) if axis == 'x' else (cross_pos, main_pos))
-            main_pos += main + gap
-            line_thickness = max(line_thickness, cross)
-        return offsets
-
-    def _best_shelf_offsets(self, sizes, axis, gap, aspect=1.5):
-        """ Shelf offsets with the wrap limit that best fills a landscape view. """
-
-        mains = [w if axis == 'x' else h for w, h in sizes]
-        best = None
-        run = -gap
-        for m in mains:
-            run += m + gap
-            offsets = self._shelf_offsets(sizes, axis, run + 1, gap)
-            width = max(ox + w for (ox, _oy), (w, _h) in zip(offsets, sizes))
-            height = max(oy + h for (_ox, oy), (_w, h) in zip(offsets, sizes))
-            score = max(width / aspect, height)
-            if best is None or score < best[0]:
-                best = (score, offsets)
-        return best[1]
-
-    def _normalize_block(self, pos):
-        """ Shift block positions so its bounding box starts at 0,0. Returns (pos, width, height). """
-
-        min_x = min(x for x, _y in pos.values())
-        min_y = min(y for _x, y in pos.values())
-        max_x = max(x + self._node_size(n)[0] for n, (x, _y) in pos.items())
-        max_y = max(y + self._node_size(n)[1] for n, (_x, y) in pos.items())
-        shifted = {n: (x - min_x, y - min_y) for n, (x, y) in pos.items()}
-        return shifted, max_x - min_x, max_y - min_y
-
-    def _organize_apply(self, blocks, links, axis, mirror=False):
-        """ Pack the per-tree blocks, move the nodes and refresh.
-        Trees with lines go first in priority order; loose nodes are gathered in a compact grid. """
-
-        GAP = 80
-        LOOSE_GAP = 30
-        anchor = self.scene.itemsBoundingRect().topLeft()
-        trees = []
-        loose = []
-        for pos in blocks:
-            if len(pos) == 1:
-                loose.append(next(iter(pos)))
-            else:
-                trees.append(self._normalize_block(pos))
-        if loose:
-            sizes = [self._node_size(n) for n in loose]
-            offsets = self._best_shelf_offsets(sizes, 'x', LOOSE_GAP)
-            trees.append(self._normalize_block({n: offsets[i] for i, n in enumerate(loose)}))
-
-        sizes = [(w, h) for _pos, w, h in trees]
-        offsets = self._best_shelf_offsets(sizes, axis, GAP)
-        total_w = max(ox + w for (ox, _oy), (w, _h) in zip(offsets, sizes))
-
-        for (pos, w, _h), (ox, oy) in zip(trees, offsets):
-            if mirror:
-                ox = total_w - ox - w
-            for n, (x, y) in pos.items():
-                nx = anchor.x() + ox + x
-                ny = anchor.y() + oy + y
-                if getattr(n, 'code_or_cat', None) is not None:
-                    n.code_or_cat['x'] = nx
-                    n.code_or_cat['y'] = ny
-                n.setPos(nx, ny)
-        for link in links:
-            if hasattr(link, 'redraw'):
-                link.redraw()
-        self.finalize_graph_operation()
-
-    def _layout_tree_top_down(self, root, children):
-        """ Top-left positions for one tree: parents centered over their children. """
-
-        H_PAD = 30
-        V_PAD = 40
-        level_height = {}
-        subtree_width = {}
-
-        def measure(node, depth):
-            w, h = self._node_size(node)
-            level_height[depth] = max(level_height.get(depth, 0), h)
-            kids = children.get(node, [])
-            if not kids:
-                subtree_width[node] = w
-                return w
-            total = sum(measure(c, depth + 1) for c in kids) + H_PAD * (len(kids) - 1)
-            subtree_width[node] = max(w, total)
-            return subtree_width[node]
-
-        measure(root, 0)
-        level_y = {}
-        y = 0
-        for d in range(max(level_height) + 1):
-            level_y[d] = y
-            y += level_height.get(d, 30) + V_PAD
-        pos = {}
-
-        def place(node, left_x, depth):
-            kids = children.get(node, [])
-            w = self._node_size(node)[0]
-            if not kids:
-                pos[node] = (left_x + (subtree_width[node] - w) / 2, level_y[depth])
-                return left_x + subtree_width[node] / 2
-            kids_width = sum(subtree_width[c] for c in kids) + H_PAD * (len(kids) - 1)
-            child_left = left_x + (subtree_width[node] - kids_width) / 2
-            centers = []
-            for c in kids:
-                centers.append(place(c, child_left, depth + 1))
-                child_left += subtree_width[c] + H_PAD
-            center = sum(centers) / len(centers)
-            pos[node] = (center - w / 2, level_y[depth])
-            return center
-
-        place(root, 0, 0)
-        return pos
-
-    def _layout_tree_horizontal(self, root, children, direction):
-        """ Top-left positions for one tree in columns, LR or RL; columns sized to their widest node. """
-
-        H_GAP = 80
-        V_GAP = 20
-        level_width = {}
-
-        def measure(node, depth):
-            level_width[depth] = max(level_width.get(depth, 0), self._node_size(node)[0])
-            for c in children.get(node, []):
-                measure(c, depth + 1)
-
-        measure(root, 0)
-        level_x = {}
-        x = 0
-        for d in range(max(level_width) + 1):
-            level_x[d] = x
-            x += level_width.get(d, 100) + H_GAP
-        pos = {}
-        current_y = 0
-
-        def place(node, depth):
-            nonlocal current_y
-            w, h = self._node_size(node)
-            node_x = level_x[depth] if direction == "LR" else -level_x[depth] - w
-            kids = children.get(node, [])
-            if not kids:
-                pos[node] = (node_x, current_y)
-                y = current_y
-                current_y += h + V_GAP
-                return y
-            ys = [place(c, depth + 1) for c in kids]
-            parent_y = sum(ys) / len(ys)
-            pos[node] = (node_x, parent_y)
-            current_y = max(current_y, parent_y + h + V_GAP)
-            return parent_y
-
-        place(root, 0)
-        return pos
-
-    def _layout_tree_radial(self, root, children):
-        """ Top-left positions for one tree as a star; ring spacing grows when the rim gets crowded. """
-
-        leaves = {}
-        depth_of = {}
-
-        def count(node, depth):
-            depth_of[node] = depth
-            kids = children.get(node, [])
-            leaves[node] = sum(count(c, depth + 1) for c in kids) if kids else 1
-            return leaves[node]
-
-        count(root, 0)
-        max_depth = max(depth_of.values())
-        rim = sum(self._node_size(n)[0] + 20 for n in depth_of if not children.get(n))
-        radius_step = 280
-        if max_depth > 0:
-            radius_step = max(radius_step, rim / (2 * math.pi * max_depth))
-        pos = {}
-
-        def place(node, depth, a0, a1):
-            w, h = self._node_size(node)
-            if depth == 0:
-                cx, cy = 0, 0
-            else:
-                r = max(200, depth * radius_step)
-                mid = (a0 + a1) / 2
-                cx, cy = r * math.cos(mid), r * math.sin(mid)
-            pos[node] = (cx - w / 2, cy - h / 2)
-            kids = children.get(node, [])
-            if kids:
-                per_leaf = (a1 - a0) / leaves[node]
-                a = a0
-                for c in kids:
-                    span = leaves[c] * per_leaf
-                    place(c, depth + 1, a, a + span)
-                    a += span
-
-        place(root, 0, 0, 2 * math.pi)
-        return pos
-
-    def organize_hierarchically(self):
-        """ Top-down tree layout, one tree per branch placed side by side. """
-
-        nodes, links, roots, children = self._organize_forest()
-        if not nodes:
-            return
-        blocks = [self._layout_tree_top_down(r, children) for r in roots]
-        self._organize_apply(blocks, links, 'x')
-
-    def organize_horizontal(self, direction="LR"):
-        """ Horizontal tree layout, LR (left to right) or RL (right to left), one tree per branch stacked. """
-
-        nodes, links, roots, children = self._organize_forest()
-        if not nodes:
-            return
-        blocks = [self._layout_tree_horizontal(r, children, direction) for r in roots]
-        self._organize_apply(blocks, links, 'y', mirror=(direction == "RL"))
-
-    def organize_radially(self):
-        """ Radial layout, one star per branch arranged in a grid. """
-
-        nodes, links, roots, children = self._organize_forest()
-        if not nodes:
-            return
-        blocks = [self._layout_tree_radial(r, children) for r in roots]
-        self._organize_apply(blocks, links, 'x')
 
     def add_codes_of_av_files(self, x=10, y=10):
         """ Show selected codes of selected audio/video files as av graphics items.
@@ -3829,15 +3662,11 @@ class ViewGraph(QDialog):
         selected = ui.get_selected()
         if not selected:
             return
-        # open the Node Relations dialog (same flow as drag-to-connect)
-        # so the relationship line is defined here: label, color, line type and arrow,
-        # instead of the plain color picker that produced unlabelled lines.
-        ui = DialogNodeRelations(self.app, self)
-        if not ui.exec():
+        # relation (label, color, line type and arrow), same flow as drag-to-connect
+        relation = self.select_relation()
+        if relation is None:
             return
-        color = ui.selected_color
-        label = ui.selected_relation
-        line_type_str, arrow_mode_str = self._resolve_line_type_key(ui.selected_line_type)
+        color, label, line_type_str, arrow_mode_str = relation
         # snapshot before adding, so one undo reverts the whole batch
         self._save_undo_state()
 
@@ -3953,125 +3782,23 @@ class ViewGraph(QDialog):
             self.ui.pushButton_minimap.setChecked(self._minimap_visible)
             self.ui.pushButton_minimap.blockSignals(False)
 
-    def align_selected(self, direction="vertical"):
-        """ Align selected nodes to a vertical column or horizontal row.
-        Uses Qt's BVH via selectedItems for O(K) lookup; clamps against collisions. """
-        valid_classes = (TextGraphicsItem, FreeTextGraphicsItem, CaseTextGraphicsItem,
-                         FileTextGraphicsItem, PixmapGraphicsItem, AVGraphicsItem, MemoGraphicsItem)
-        selected = [it for it in self.scene.selectedItems() if isinstance(it, valid_classes)]
-        if len(selected) < 2:
-            return
-        self._save_undo_state()
-        is_vertical = (direction == "vertical")
-        centers = [it.sceneBoundingRect().center().y() if is_vertical else it.sceneBoundingRect().center().x()
-                   for it in selected]
-        target_center = sum(centers) / len(selected)
-        selected.sort(key=lambda it: it.scenePos().x() if is_vertical else it.scenePos().y())
-        padding = 15 if is_vertical else 10
-        last_edge = float('-inf')
-        for it in selected:
-            rect = it.boundingRect()
-            pos = it.pos()
-            if is_vertical:
-                new_y = target_center - (rect.height() / 2.0)
-                new_x = max(pos.x(), last_edge + padding)
-                it.setPos(new_x, new_y)
-                last_edge = new_x + rect.width()
-            else:
-                new_x = target_center - (rect.width() / 2.0)
-                new_y = max(pos.y(), last_edge + padding)
-                it.setPos(new_x, new_y)
-                last_edge = new_y + rect.height()
-            if getattr(it, 'code_or_cat', None) is not None:
-                it.code_or_cat['x'], it.code_or_cat['y'] = it.pos().x(), it.pos().y()
-        for item in self.scene.items():
-            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
-                item.redraw()
-        self.scene.update()
-        self._refresh_minimap()
-
-    def distribute_selected(self, direction="vertical"):
-        """ Distribute selected nodes uniformly along an axis. """
-        valid_classes = (TextGraphicsItem, FreeTextGraphicsItem, CaseTextGraphicsItem,
-                         FileTextGraphicsItem, PixmapGraphicsItem, AVGraphicsItem, MemoGraphicsItem)
-        selected = [it for it in self.scene.selectedItems() if isinstance(it, valid_classes)]
-        if len(selected) < 3:
-            return
-        self._save_undo_state()
-        is_vertical = (direction == "vertical")
-        selected.sort(key=lambda it: it.sceneBoundingRect().center().y() if is_vertical else it.sceneBoundingRect().center().x())
-        if is_vertical:
-            total_size = sum(it.boundingRect().height() for it in selected)
-            start_pos = selected[0].sceneBoundingRect().top()
-            end_pos = selected[-1].sceneBoundingRect().bottom()
-        else:
-            total_size = sum(it.boundingRect().width() for it in selected)
-            start_pos = selected[0].sceneBoundingRect().left()
-            end_pos = selected[-1].sceneBoundingRect().right()
-        total_span = end_pos - start_pos
-        gap = (total_span - total_size) / float(len(selected) - 1)
-        min_gap = 15.0
-        if gap < min_gap:
-            gap = min_gap
-        current_pos = start_pos
-        for it in selected:
-            rect = it.boundingRect()
-            if is_vertical:
-                it.setPos(it.pos().x(), current_pos)
-                current_pos += rect.height() + gap
-            else:
-                it.setPos(current_pos, it.pos().y())
-                current_pos += rect.width() + gap
-            if getattr(it, 'code_or_cat', None) is not None:
-                it.code_or_cat['x'], it.code_or_cat['y'] = it.pos().x(), it.pos().y()
-        for item in self.scene.items():
-            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
-                item.redraw()
-        self.scene.update()
-        self._refresh_minimap()
-
-    def _scale_graph(self, factor):
-        """ Scale all node positions by `factor` relative to center of mass. """
-        nodes = [it for it in self.scene.items()
-                 if isinstance(it, (TextGraphicsItem, FreeTextGraphicsItem, CaseTextGraphicsItem,
-                                    FileTextGraphicsItem, PixmapGraphicsItem, AVGraphicsItem, MemoGraphicsItem))]
-        if not nodes:
-            return
-        self._save_undo_state()
-        cx = sum(it.pos().x() for it in nodes) / len(nodes)
-        cy = sum(it.pos().y() for it in nodes) / len(nodes)
-        for it in nodes:
-            dx = it.pos().x() - cx
-            dy = it.pos().y() - cy
-            new_x = cx + dx * factor
-            new_y = cy + dy * factor
-            it.setPos(new_x, new_y)
-            if hasattr(it, 'code_or_cat') and it.code_or_cat is not None:
-                it.code_or_cat['x'] = new_x
-                it.code_or_cat['y'] = new_y
-        for item in self.scene.items():
-            if isinstance(item, (LinkGraphicsItem, FreeLineGraphicsItem)):
-                item.redraw()
-        if factor > 1.0:
-            rect = self.scene.itemsBoundingRect()
-            rect.adjust(-100, -100, 100, 100)
-            candidate = self.scene.sceneRect().united(rect)
-            MAX_SCENE = 50000
-            if candidate.width() > MAX_SCENE or candidate.height() > MAX_SCENE:
-                candidate.setWidth(min(candidate.width(), MAX_SCENE))
-                candidate.setHeight(min(candidate.height(), MAX_SCENE))
-            self.scene.setSceneRect(candidate)
-        self.scene.update()
-        self._refresh_minimap()
-
     def _hide_all_handles(self):
-        """ Hide all handles (used by exporters so PNG/PDF/Draw.io/ODT stay clean). """
+        """ Hide all handles and the selection outline (used by exporters so PNG/PDF/ODT stay clean). """
         for item in self.scene.items():
             if isinstance(item, (ConnectionHandleItem, ResizeHandleItem)):
                 item.setVisible(False)
+        self._export_selection = self.scene.selectedItems()
+        for item in self._export_selection:
+            item.setSelected(False)
 
     def _restore_all_handles(self):
-        """ Restore handles only if their parent node is still selected. """
+        """ Restore the selection, and handles only if their parent node is still selected. """
+        for item in getattr(self, '_export_selection', []):
+            try:
+                item.setSelected(True)
+            except RuntimeError:
+                continue
+        self._export_selection = []
         for item in self.scene.items():
             if isinstance(item, (ConnectionHandleItem, ResizeHandleItem)):
                 if hasattr(item, 'parent_item') and item.parent_item.isSelected():
@@ -4111,12 +3838,10 @@ class ViewGraph(QDialog):
             target = clicked_item
             self.cancel_connection_drag()
             self.scene.clear_connection_preview()
-            ui = DialogNodeRelations(self.app, self)
-            if not ui.exec():
+            relation = self.select_relation()
+            if relation is None:
                 return
-            color = ui.selected_color
-            label = ui.selected_relation
-            line_type_str, arrow_mode_str = self._resolve_line_type_key(ui.selected_line_type)
+            color, label, line_type_str, arrow_mode_str = relation
             self._save_undo_state()
             for existing in list(self.scene.items()):
                 if isinstance(existing, FreeLineGraphicsItem):
@@ -4318,7 +4043,11 @@ class ViewGraph(QDialog):
         painter = QtGui.QPainter(image)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        self.scene.render(painter, QtCore.QRectF(image.rect()), rect)
+        self._hide_all_handles()
+        try:
+            self.scene.render(painter, QtCore.QRectF(image.rect()), rect)
+        finally:
+            self._restore_all_handles()
         painter.end()
         image.save(filepath)
         Message(self.app, _("Image exported"), filepath).exec()
@@ -4338,6 +4067,7 @@ class ViewGraph(QDialog):
         xml += '      <root>\n        <mxCell id="0" />\n        <mxCell id="1" parent="0" />\n'
         item_ids = {}
         current_id = 2
+        nodes_start = len(xml)
         # Nodes. Includes MemoGraphicsItem so live memo nodes are exported too.
         EXPORTABLE_NODE_TYPES = ("TextGraphicsItem", "FreeTextGraphicsItem",
                                  "CaseTextGraphicsItem", "FileTextGraphicsItem",
@@ -4431,12 +4161,43 @@ class ViewGraph(QDialog):
                         font_hex = TextColor(fill_hex).recommendation
                     except Exception:
                         pass
-                    shape = "ellipse" if is_ellipse else "rounded=1"
-                    style = f"{shape};whiteSpace=wrap;html=1;fillColor={fill_hex};strokeColor=#333333;fontColor={font_hex};"
+                    node_shape = getattr(item, 'node_shape', None) or "rectangle"
+                    fill_qcolor = QtGui.QColor(fill_hex)
+                    soft_outline = "#9E9E9E" if fill_qcolor.lightness() > 230 else fill_qcolor.darker(130).name()
+                    if node_shape == "icon":
+                        # color square before code names, without a box
+                        if item.has_shape_icon():
+                            icon_html = f'<span style="color:{fill_hex}">&#9632;</span>&nbsp;'
+                            label = icon_html.replace('&', '&amp;').replace('<', '&lt;').replace(
+                                '>', '&gt;').replace('"', '&quot;') + label
+                        style = ("rounded=1;absoluteArcSize=1;arcSize=6;html=1;align=left;spacingLeft=4;"
+                                 f"fillColor=none;strokeColor=none;fontColor={ON_CANVAS_TEXT_COLOR};")
+                    elif node_shape == "circle":
+                        # the vertex is the circle; the name sits below it
+                        circle = item.circle_rect()
+                        x = round(item.pos().x() + circle.x(), 2)
+                        y = round(item.pos().y() + circle.y(), 2)
+                        w = h = round(circle.width(), 2)
+                        style = (f"ellipse;aspect=fixed;html=1;fillColor={fill_hex};strokeColor={soft_outline};"
+                                 "verticalLabelPosition=bottom;verticalAlign=top;labelBackgroundColor=#FFFFFF;"
+                                 f"fontColor={ON_CANVAS_TEXT_COLOR};")
+                    elif is_ellipse:
+                        style = (f"ellipse;whiteSpace=wrap;html=1;fillColor={fill_hex};strokeColor={soft_outline};"
+                                 f"fontColor={font_hex};")
+                    else:
+                        style = (f"rounded=1;absoluteArcSize=1;arcSize=6;whiteSpace=wrap;html=1;fillColor={fill_hex};"
+                                 f"strokeColor=#333333;fontColor={font_hex};")
+                    if getattr(item, 'bold', False):
+                        style += "fontStyle=1;"
+                    # canvas sizes are points, draw.io sizes are pixels
+                    style += f"fontSize={round((getattr(item, 'font_size', 9) or 9) * 4 / 3)};"
                 xml += f'        <mxCell id="{current_id}" value="{label}" style="{style}" vertex="1" parent="1">\n'
                 xml += f'          <mxGeometry x="{x}" y="{y}" width="{w}" height="{h}" as="geometry" />\n'
                 xml += '        </mxCell>\n'
                 current_id += 1
+        # connections go before the nodes so draw.io paints them behind, as on the canvas
+        nodes_xml = xml[nodes_start:]
+        xml = xml[:nodes_start]
         # Connections (lines)
         for item in self.scene.items():
             if not item.isVisible():
@@ -4480,6 +4241,7 @@ class ViewGraph(QDialog):
                     xml += '          <mxGeometry relative="1" as="geometry" />\n'
                     xml += '        </mxCell>\n'
                     current_id += 1
+        xml += nodes_xml
         xml += '      </root>\n    </mxGraphModel>\n  </diagram>\n</mxfile>'
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -4511,11 +4273,15 @@ class ViewGraph(QDialog):
         painter = QtGui.QPainter(pdf_writer)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
-        self.scene.render(
-            painter,
-            QtCore.QRectF(0, 0, bounding_rect.width(), bounding_rect.height()),
-            bounding_rect
-        )
+        self._hide_all_handles()
+        try:
+            self.scene.render(
+                painter,
+                QtCore.QRectF(0, 0, bounding_rect.width(), bounding_rect.height()),
+                bounding_rect
+            )
+        finally:
+            self._restore_all_handles()
         painter.end()
         Message(self.app, _("PDF exported (cropped)"), filepath).exec()
 
@@ -5220,6 +4986,7 @@ class ViewGraph(QDialog):
         width, height = self.scene.suggested_scene_size()
         self.scene.set_width(width)
         self.scene.set_height(height)
+        v18 = graph_v18_tables(self.app.conn)
         # Insert graphics items first, but not the lines, as need the insertids
         try:
             try:
@@ -5229,6 +4996,9 @@ class ViewGraph(QDialog):
                 Message(self.app, _("Name error"), _("This name already used. Choose another name.")).exec()
                 self.app.conn.rollback()
                 return
+            save_v18_columns(cur, "graph", {'node_shape': self.graph_node_shape,
+                                            'node_size_mode': self.graph_size_mode,
+                                            'line_width_mode': self.graph_line_mode}, v18)
             cur.execute("select last_insert_rowid()")
             grid = cur.fetchone()[0]
             for i in self.scene.items():
@@ -5238,23 +5008,32 @@ class ViewGraph(QDialog):
                     cur.execute(sql,
                                 [grid, i.pos().x(), i.pos().y(), i.code_or_cat['supercatid'], i.code_or_cat['catid'],
                                  i.code_or_cat['cid'], i.font_size, i.bold, i.isVisible(), i.toPlainText()])
+                    save_v18_columns(cur, "gr_cdct_text_item",
+                                     {'shape': i.node_shape, 'size_mode': i.size_mode,
+                                      'text_width': positive_width_or_none(i.textWidth())}, v18)
                 if isinstance(i, CaseTextGraphicsItem):
                     sql = "insert into gr_case_text_item (grid,x,y,caseid,font_size,bold,color, displaytext) " \
                           "values (?,?,?,?,?,?,?,?)"
                     cur.execute(sql,
                                 [grid, i.pos().x(), i.pos().y(), i.case_id, i.font_size, i.bold, i.color,
                                  i.toPlainText()])
+                    save_v18_columns(cur, "gr_case_text_item",
+                                     {'text_width': positive_width_or_none(i.textWidth())}, v18)
                 if isinstance(i, FileTextGraphicsItem):
                     sql = "insert into gr_file_text_item (grid,x,y,fid,font_size,bold,color, displaytext) " \
                           "values (?,?,?,?,?,?,?,?)"
                     cur.execute(sql,
                                 [grid, i.pos().x(), i.pos().y(), i.file_id, i.font_size, i.bold, i.color,
                                  i.toPlainText()])
+                    save_v18_columns(cur, "gr_file_text_item",
+                                     {'text_width': positive_width_or_none(i.textWidth())}, v18)
                 if isinstance(i, PixmapGraphicsItem):
                     sql = "insert into gr_pix_item (grid,imid,x,y,px,py,w,h,filepath,tooltip,pdf_page) values " \
                           "(?,?,?,?,?,?,?,?,?,?,?)"
                     cur.execute(sql, [grid, i.imid, i.pos().x(), i.pos().y(), i.px, i.py, i.pwidth, i.pheight, i.path_,
                                       i.toolTip(), i.pdf_page])
+                    save_v18_columns(cur, "gr_pix_item",
+                                     {'display_width': positive_width_or_none(i.display_width())}, v18)
                 if isinstance(i, AVGraphicsItem):
                     sql = "insert into gr_av_item (grid,avid,x,y,pos0,pos1,filepath,tooltip, color) values " \
                           "(?,?,?,?,?,?,?,?,?)"
@@ -5267,6 +5046,8 @@ class ViewGraph(QDialog):
                     cur.execute(sql,
                                 [grid, i.freetextid, i.pos().x(), i.pos().y(), i.text, i.font_size, i.bold, i.color,
                                  tt, i.ctid, i.memo_ctid, i.memo_imid, i.memo_avid])
+                    save_v18_columns(cur, "gr_free_text_item",
+                                     {'text_width': positive_width_or_none(i.textWidth())}, v18)
                     cur.execute("select last_insert_rowid()")  # the gfreeid
                     i.freetextid = cur.fetchone()[0]
                     cur.execute("update gr_free_text_item set freetextid=? where gfreeid=?", [i.freetextid, i.freetextid])
@@ -5280,6 +5061,8 @@ class ViewGraph(QDialog):
                                           i.pos().x(), i.pos().y(),
                                           getattr(i, 'color', 'blue') or 'blue',
                                           getattr(i, 'font_size', 9) or 9])
+                    save_v18_columns(cur, "gr_memo_item",
+                                     {'text_width': positive_width_or_none(i.textWidth())}, v18)
                     cur.execute("select last_insert_rowid()")
                     i.gmemoid = cur.fetchone()[0]
             # no commit yet, one transaction for the whole save
@@ -5302,6 +5085,7 @@ class ViewGraph(QDialog):
                                       i.isVisible(),
                                       getattr(i, 'label', '') or '',
                                       getattr(i, 'arrow_mode', 'none') or 'none'])
+                    save_v18_columns(cur, "gr_cdct_line_item", {'width_mode': i.width_mode}, v18)
                 if isinstance(i, FreeLineGraphicsItem):
                     from_catid = None
                     try:
@@ -5689,6 +5473,7 @@ class ViewGraph(QDialog):
         self.scene.set_width(graph['width'])
         self.scene.set_height(graph['height'])
         grid = graph['grid']
+        self._load_graph_style(grid)
         err_msg = self.load_code_or_cat_text_graphics_items(grid)
         err_msg += self.load_file_text_graphics_items(grid)
         err_msg += self.load_case_text_graphics_items(grid)
@@ -5716,15 +5501,17 @@ class ViewGraph(QDialog):
 
         # SELECT includes label and arrow_mode (v17 columns) so labels
         # and direction toggles persist across save/load cycles.
+        width_mode_column = "width_mode" if table_has_columns(
+            self.app.conn, "gr_cdct_line_item", GRAPH_V18_COLUMNS["gr_cdct_line_item"]) else "null"
         sql = ("select fromcatid,fromcid,tocatid,tocid,linewidth,linetype,color,"
-               "isvisible,glineid,ifnull(label,''),ifnull(arrow_mode,'none') "
+               f"isvisible,glineid,ifnull(label,''),ifnull(arrow_mode,'none'),{width_mode_column} "
                "from gr_cdct_line_item where grid=?")
         cur = self.app.conn.cursor()
         cur.execute(sql, [grid])
         result = cur.fetchall()
         res = []
         keys = ("fromcatid", "fromcid", "tocatid", "tocid", "linewidth", "linetype", "color",
-                "isvisible", "glineid", "label", "arrow_mode")
+                "isvisible", "glineid", "label", "arrow_mode", "width_mode")
         for row in result:
             res.append(dict(zip(keys, row)))
         for line in res:
@@ -5742,7 +5529,8 @@ class ViewGraph(QDialog):
             if from_item is not None and to_item is not None:
                 # pass label kwarg so LinkGraphicsItem builds its label widget
                 item = LinkGraphicsItem(from_item, to_item, line['linewidth'], line['linetype'],
-                                        line['color'], line['isvisible'], label=line['label'])
+                                        line['color'], line['isvisible'], label=line['label'],
+                                        width_mode=line['width_mode'])
                 # restore arrow_mode (not a ctor kwarg in LinkGraphicsItem)
                 if line['arrow_mode']:
                     item.arrow_mode = line['arrow_mode']
@@ -5852,7 +5640,10 @@ class ViewGraph(QDialog):
         """
 
         err_msg = ""
-        sql_case = "select x, y, caseid,font_size, color, bold, displaytext from gr_case_text_item where grid=?"
+        width_column = "text_width" if table_has_columns(
+            self.app.conn, "gr_case_text_item", GRAPH_V18_COLUMNS["gr_case_text_item"]) else "null"
+        sql_case = f"select x, y, caseid,font_size, color, bold, displaytext, {width_column} " \
+                   "from gr_case_text_item where grid=?"
         cur = self.app.conn.cursor()
         cur.execute(sql_case, [grid])
         res = cur.fetchall()
@@ -5860,8 +5651,10 @@ class ViewGraph(QDialog):
             cur.execute("select name, ifnull(memo,'') from cases where caseid=?", [i[2]])
             res_name = cur.fetchone()
             if res_name is not None:
-                self.scene.addItem(
-                    CaseTextGraphicsItem(self.app, res_name[0], i[2], i[0], i[1], i[3], i[4], i[5], i[6]))
+                item = CaseTextGraphicsItem(self.app, res_name[0], i[2], i[0], i[1], i[3], i[4], i[5], i[6])
+                if positive_width_or_none(i[7]) is not None:
+                    item.setTextWidth(i[7])
+                self.scene.addItem(item)
             else:
                 err_msg += _("Case: ") + str(i[2]) + " "
         return err_msg
@@ -5872,7 +5665,10 @@ class ViewGraph(QDialog):
         """
 
         err_msg = ""
-        sql_file = "select x, y, fid, font_size, color, bold, displaytext from gr_file_text_item where grid=?"
+        width_column = "text_width" if table_has_columns(
+            self.app.conn, "gr_file_text_item", GRAPH_V18_COLUMNS["gr_file_text_item"]) else "null"
+        sql_file = f"select x, y, fid, font_size, color, bold, displaytext, {width_column} " \
+                   "from gr_file_text_item where grid=?"
         cur = self.app.conn.cursor()
         cur.execute(sql_file, [grid])
         res = cur.fetchall()
@@ -5880,8 +5676,10 @@ class ViewGraph(QDialog):
             cur.execute("select name, ifnull(memo, '') from source where id=?", [i[2]])
             res_name = cur.fetchone()
             if res_name is not None:
-                self.scene.addItem(
-                    FileTextGraphicsItem(self.app, res_name[0], i[2], i[0], i[1], i[3], i[4], i[5], i[6]))
+                item = FileTextGraphicsItem(self.app, res_name[0], i[2], i[0], i[1], i[3], i[4], i[5], i[6])
+                if positive_width_or_none(i[7]) is not None:
+                    item.setTextWidth(i[7])
+                self.scene.addItem(item)
             else:
                 err_msg += _("File: ") + str(i[2]) + " "
         return err_msg
@@ -5892,14 +5690,18 @@ class ViewGraph(QDialog):
         """
 
         err_msg = ""
+        width_column = "text_width" if table_has_columns(
+            self.app.conn, "gr_free_text_item", GRAPH_V18_COLUMNS["gr_free_text_item"]) else "null"
         sql = "select freetextid, x, y, free_text, font_size, color, bold, tooltip, ctid, memo_ctid, memo_imid, " \
-              "memo_avid, gfreeid from gr_free_text_item where grid=?"
+              f"memo_avid, gfreeid, {width_column} from gr_free_text_item where grid=?"
         cur = self.app.conn.cursor()
         cur.execute(sql, [grid])
         res = cur.fetchall()
         for i in res:
             item = FreeTextGraphicsItem(self.app, i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[8], i[9], i[10], i[11],
                                         i[12])
+            if positive_width_or_none(i[13]) is not None:
+                item.setTextWidth(i[13])
             if i[7] != "":
                 item.setToolTip(i[7])
             self.scene.addItem(item)
@@ -5911,13 +5713,18 @@ class ViewGraph(QDialog):
         """
 
         err_msg = ""
-        sql_pix = "select imid, x,y, px,py ,w,h, filepath, tooltip, pdf_page from gr_pix_item where grid=?"
+        width_column = "display_width" if table_has_columns(
+            self.app.conn, "gr_pix_item", GRAPH_V18_COLUMNS["gr_pix_item"]) else "null"
+        sql_pix = f"select imid, x,y, px,py ,w,h, filepath, tooltip, pdf_page, {width_column} " \
+                  "from gr_pix_item where grid=?"
         cur = self.app.conn.cursor()
         cur.execute(sql_pix, [grid])
         res = cur.fetchall()
         for i in res:
             # app, imid=-1, x=10, y=10, px=0, py=0, pwidth=0, pheight=0, path_="", grpixid=None, pdf_page=None
             item = PixmapGraphicsItem(self.app, i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7], grid, i[9])
+            if positive_width_or_none(i[10]) is not None:
+                item.set_display_width(i[10])
             if i[8] != "":
                 item.setToolTip(i[8])
             self.scene.addItem(item)
@@ -5952,16 +5759,18 @@ class ViewGraph(QDialog):
 
         err_msg = ""
         cur = self.app.conn.cursor()
+        width_column = "text_width" if table_has_columns(
+            self.app.conn, "gr_memo_item", GRAPH_V18_COLUMNS["gr_memo_item"]) else "null"
         try:
             cur.execute("select gmemoid, memo_source_type, memo_source_id, x, y, "
-                        "ifnull(color,'blue'), ifnull(font_size,9) "
+                        f"ifnull(color,'blue'), ifnull(font_size,9), {width_column} "
                         "from gr_memo_item where grid=?", [grid])
             rows = cur.fetchall()
         except sqlite3.OperationalError:
             # Table doesn't exist yet (pre-v16 project), silently skip.
             return err_msg
         for r in rows:
-            gmemoid, src_type, src_id, x, y, color, font_size = r
+            gmemoid, src_type, src_id, x, y, color, font_size, text_width = r
             try:
                 memo_node = MemoGraphicsItem(self.app, src_type, src_id, x, y)
                 memo_node.gmemoid = gmemoid
@@ -5969,6 +5778,9 @@ class ViewGraph(QDialog):
                     memo_node.color = color
                 if font_size:
                     memo_node.font_size = font_size
+                    memo_node.setFont(QtGui.QFont(self.app.settings['font'], font_size))
+                if positive_width_or_none(text_width) is not None:
+                    memo_node.setTextWidth(text_width)
                 # Verify the source still exists; if not, drop the row and skip the node
                 select_sql, _u, params = memo_node._get_sql_and_params()
                 if select_sql is not None:
@@ -5989,8 +5801,10 @@ class ViewGraph(QDialog):
         """
 
         err_msg = ""
-        sql_cdct = "select x, y, supercatid, catid, cid, font_size, bold, isvisible, displaytext " \
-                   "from gr_cdct_text_item where grid=?"
+        appearance_columns = "shape, size_mode, text_width" if table_has_columns(
+            self.app.conn, "gr_cdct_text_item", GRAPH_V18_COLUMNS["gr_cdct_text_item"]) else "null, null, null"
+        sql_cdct = "select x, y, supercatid, catid, cid, font_size, bold, isvisible, displaytext, " \
+                   f"{appearance_columns} from gr_cdct_text_item where grid=?"
         cur = self.app.conn.cursor()
         cur.execute(sql_cdct, [grid])
         res_cdct = cur.fetchall()
@@ -6017,7 +5831,8 @@ class ViewGraph(QDialog):
                 cdct = {'name': name, 'supercatid': i[2], 'catid': i[3], 'cid': i[4], 'x': i[0], 'y': i[1],
                         'color': color, 'displaytext': i[8], 'supercid': supercid}
                 cdct['child_names'] = self.named_children_of_node(cdct)
-                self.scene.addItem(TextGraphicsItem(self.app, cdct, i[5], i[6], i[7]))
+                self.scene.addItem(TextGraphicsItem(self.app, cdct, i[5], i[6], i[7],
+                                                    shape=i[9], size_mode=i[10], text_width=i[11]))
             else:
                 # Code or category has been deleted
                 cdcat = _("Category")
@@ -6496,7 +6311,10 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
     def _save_drag_undo(self, start_positions):
         if self.parent is None:
             return
-        snapshot = {'nodes': [], 'lines': []}
+        snapshot = {'nodes': [], 'lines': [],
+                    'graph_style': (getattr(self.parent, 'graph_node_shape', "rectangle"),
+                                    getattr(self.parent, 'graph_size_mode', "none"),
+                                    getattr(self.parent, 'graph_line_mode', "none"))}
         for item in self.items():
             try:
                 cls_name = type(item).__name__
@@ -6515,7 +6333,7 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
                 }
                 if hasattr(item, 'code_or_cat') and item.code_or_cat is not None:
                     node_data['code_or_cat'] = deepcopy(item.code_or_cat)
-                for attr in ('text', 'color', 'font_size', 'bold', 'is_ellipse',
+                for attr in ('text', 'color', 'font_size', 'bold', 'node_shape', 'size_mode',
                              'is_collapsed', 'show_attributes'):
                     if hasattr(item, attr):
                         try:
@@ -6548,7 +6366,7 @@ class GraphicsScene(QtWidgets.QGraphicsScene):
                         'visible': line.isVisible(), 'in_scene': line.scene() == self,
                     }
                     for attr in ('color', 'line_width', 'line_type', 'arrow_mode',
-                                 'label', '_is_cooc_line'):
+                                 'label', '_is_cooc_line', 'width_mode'):
                         if hasattr(line, attr):
                             try:
                                 line_data[attr] = getattr(line, attr)
@@ -6933,7 +6751,8 @@ class MemoGraphicsItem(QtWidgets.QGraphicsTextItem):
         option.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.document().setDefaultTextOption(option)
         self.setToolTip(self.text[:1000] if len(self.text) > 1000 else self.text)
-        if self.boundingRect().width() > self.MAX_WIDTH:
+        # keep a width set by the resize handle
+        if self.textWidth() <= 0 and self.boundingRect().width() > self.MAX_WIDTH:
             self.setTextWidth(self.MAX_WIDTH)
 
     def _edit_memo(self):
@@ -7912,6 +7731,8 @@ class FreeLineGraphicsItem(QtWidgets.QGraphicsPolygonItem):
 
     def contextMenuEvent(self, event):
         menu = QtWidgets.QMenu()
+        # relation from the framework: label, color, line type and arrow at once
+        change_relation_action = menu.addAction(_('Change relation...'))
         # edit the relation label directly on the line
         edit_label_action = menu.addAction(_('Edit label'))
         # arrow direction submenu (persisted as arrow_mode, v17)
@@ -7944,6 +7765,9 @@ class FreeLineGraphicsItem(QtWidgets.QGraphicsPolygonItem):
         remove_action = menu.addAction(_('Remove'))
         action = menu.exec(QtGui.QCursor.pos())
         if action is None:
+            return
+        if action == change_relation_action:
+            invoke_graph_method(self, 'change_line_relation', self)
             return
         # snapshot before style/label changes (drag-undo pattern)
         if action != remove_action:
@@ -8046,23 +7870,9 @@ class FreeLineGraphicsItem(QtWidgets.QGraphicsPolygonItem):
     def calculate_points_and_draw(self):
         """ Cálculo fluido con punta de flecha giratoria. """
 
-        c1 = self.from_widget.sceneBoundingRect().center()
-        c2 = self.to_widget.sceneBoundingRect().center()
         self.setZValue(-1)
-
-        is_ellipse_from = getattr(self.from_widget, 'is_ellipse', False)
-        is_ellipse_to = getattr(self.to_widget, 'is_ellipse', False)
-
-        rect1 = self.from_widget.sceneBoundingRect()
-        rect2 = self.to_widget.sceneBoundingRect()
-
-        # edge-point math delegated to the module-level compute_edge_point
-        # helper (shared with LinkGraphicsItem, single source of truth).
-        if rect1.intersects(rect2):
-            p1, p2 = c1, c2
-        else:
-            p1 = compute_edge_point(c1, c2, rect1, is_ellipse_from)
-            p2 = compute_edge_point(c2, c1, rect2, is_ellipse_to)
+        # line ends shared with LinkGraphicsItem
+        p1, p2 = cached_line_end_points(self)
         color_obj = safe_color(self.color)  # tolerant color lookup
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))
 
@@ -8518,22 +8328,29 @@ class PixmapGraphicsItem(QtWidgets.QGraphicsPixmapItem):
         super().paint(painter, option, widget)
 
 
-class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
+class TextGraphicsItem(NodeShapeMixin, QtWidgets.QGraphicsTextItem):
     """ The item show the name and color of the code or category
     Categories are shown white. A custom context menu
     allows selection of a code/category memo and displaying the information.
     """
 
-    def __init__(self, app, code_or_cat, font_size=9, bold=None, isvisible=True, displayed_text=""):
+    def __init__(self, app, code_or_cat, font_size=9, bold=None, isvisible=True, displayed_text="",
+                 shape=None, size_mode=None, text_width=None):
         """ Show name and colour of text. Has context menu for various options.
          param: app  : the main App class
          param: code_or_cat  : Dictionary of the code details: name, memo, color etc
          param: font_size : Integer
          param: bold : boolean, or None = categories default to bold
          param: isvisible : boolean
+         param: shape : one of NODE_SHAPES, or None to take the graph default
+         param: size_mode : one of SIZE_MODES, or None to take the graph default
+         param: text_width : resized width, or None
          """
 
         super(TextGraphicsItem, self).__init__(None)
+        # set before setFont / setPlainText, both re-run the shape layout
+        self._node_shape = shape if shape in NODE_SHAPES else None
+        self.size_mode = size_mode if size_mode in SIZE_MODES else None
         self.app = app
         self.conn = app.conn
         self.settings = app.settings
@@ -8545,7 +8362,6 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if bold is None:
             bold = code_or_cat['cid'] is None
         self.bold = bold
-        self.is_ellipse = False
         self.is_collapsed = False
         self.setPos(self.code_or_cat['x'], self.code_or_cat['y'])
         self.text = displayed_text
@@ -8560,6 +8376,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             fontweight = QtGui.QFont.Weight.Bold
         self.setFont(QtGui.QFont(self.settings['font'], self.font_size, fontweight))
         self.setPlainText(self.text)  # saved display text, falling back to the code name
+        if positive_width_or_none(text_width) is not None:
+            self.setTextWidth(text_width)
         if not isvisible:
             self.hide()
         self.code_or_cat['memo'] = ""
@@ -8573,7 +8391,7 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
 
     def __repr__(self):
         txt = f"TextGraphicsItem CodeOrCat:{self.code_or_cat} Font:{self.font_size} Bold:{self.bold}\n"
-        txt += f"Ellipse:{self.is_ellipse} Collapse:{self.is_collapsed}\n"
+        txt += f"Shape:{self.node_shape} Size mode:{self.size_mode} Collapse:{self.is_collapsed}\n"
         txt += f"Text:{self.text}"
         return txt
 
@@ -8581,6 +8399,8 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
     def itemChange(self, change, value):
         if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSelectedChange:
             QtCore.QTimer.singleShot(0, self._sync_handles_with_selection)
+        if change == QtWidgets.QGraphicsItem.GraphicsItemChange.ItemSceneHasChanged:
+            self._take_graph_defaults()
         return super().itemChange(change, value)
 
     # delegates to module-level helper (single source of truth)
@@ -8607,18 +8427,6 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
                 self.setToolTip(_("Category") + ": " + res[0])
             else:
                 self.setToolTip(_("Category"))
-
-    def paint(self, painter, option, widget):
-        painter.save()
-        color = QtGui.QColor(self.code_or_cat['color'])
-        painter.setBrush(QtGui.QBrush(color, style=QtCore.Qt.BrushStyle.SolidPattern))
-        # ellipse or rectangle, per the is_ellipse visual flag
-        if getattr(self, 'is_ellipse', False):
-            painter.drawEllipse(self.boundingRect())
-        else:
-            painter.drawRect(self.boundingRect())
-        painter.restore()
-        super().paint(painter, option, widget)
 
     # find a code/category node in the scene by ids; returns the item or None
     def _find_node_in_scene(self, cid=None, catid=None):
@@ -8706,13 +8514,17 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         # Appearance submenu
         appearance_menu = menu.addMenu(_('Appearance'))
         bold_action = appearance_menu.addAction(_("Bold toggle"))
-        shape_action = appearance_menu.addAction(_('Toggle: Ellipse/Rectangle'))
-        # Sub-menú para el tamaño de fuente. Submenu for font size
         font_size_menu = appearance_menu.addMenu(_("Font size"))
         font_size_actions = {}
-        for size in [8, 10, 12, 14, 16, 18, 20]:
+        for size in NODE_FONT_SIZES:
             act = font_size_menu.addAction(str(size))
             font_size_actions[act] = size
+        appearance_actions = add_appearance_submenus(appearance_menu, [self])
+        color_action = None
+        if self.code_or_cat['cid'] is not None:
+            appearance_menu.addSeparator()
+            color_action = appearance_menu.addAction(_("Change code color"))
+            color_action.setShortcut(QtGui.QKeySequence(QtCore.Qt.Key.Key_F5))
         menu.addSeparator()
         collapse_action = None
         if self.code_or_cat.get('child_names'):
@@ -8734,7 +8546,14 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         # their own snapshot (after user confirmation) or are read-only dialogs.
         _self_snapshot_actions = {memo_action, coded_action, case_action, hide_action,
                                   add_segments_action, add_cooc_action, add_child_codes_action,
-                                  add_parent_cat_action, add_parent_code_action, import_memo_action}
+                                  add_parent_cat_action, add_parent_code_action, import_memo_action,
+                                  color_action}
+        if action in appearance_actions:
+            invoke_graph_method(self, 'apply_node_appearance', [self], **appearance_actions[action])
+            return
+        if color_action is not None and action == color_action:
+            invoke_graph_method(self, 'change_codes_color', [self])
+            return
         if action not in _self_snapshot_actions:
             scene = self.scene()
             if scene is not None and getattr(scene, 'parent', None) is not None:
@@ -8759,9 +8578,6 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
         if add_child_codes_action and action == add_child_codes_action:
             self.add_child_codes_to_scene()
             return
-        if action == shape_action:
-            self.is_ellipse = not self.is_ellipse
-            self.update()
         if collapse_action and action == collapse_action:
             self.toggle_collapse()
         if action == add_segments_action:
@@ -8776,16 +8592,14 @@ class TextGraphicsItem(QtWidgets.QGraphicsTextItem):
             self.setPlainText(self.text)
         if action == bold_action:
             self.bold = not self.bold
-            fontweight = QtGui.QFont.Weight.Normal
-            if self.bold:
-                fontweight = QtGui.QFont.Weight.Bold
-            self.setFont(QtGui.QFont(self.settings['font'], self.font_size, fontweight))
+            self.apply_font()
         if action in font_size_actions:
+            # a manual size stops the frequency sizing of this node
             self.font_size = font_size_actions[action]
-            fontweight = QtGui.QFont.Weight.Normal
-            if self.bold:
-                fontweight = QtGui.QFont.Weight.Bold
-            self.setFont(QtGui.QFont(self.settings['font'], self.font_size, fontweight))
+            self.size_mode = "none"
+            self.apply_font()
+        if action in (bold_action, *font_size_actions):
+            invoke_graph_method(self, 'redraw_lines_of_nodes')
         if action == memo_action:
             self.add_edit_memo()
             self.get_memo()
@@ -9228,7 +9042,7 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
     """ Takes the coordinate from the two TextGraphicsItems. """
 
     def __init__(self, from_widget, to_widget, line_width=2, line_type="solid",
-                 color="gray", isvisible=True, label=""):
+                 color="gray", isvisible=True, label="", width_mode=None):
         """ Links codes and categories. Called when codes or categories of categories are inserted.
         Args:
             from_widget  : TextGraphicsItem
@@ -9238,6 +9052,7 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
             color : String
             isvisible : boolean
             label : String  allow connections (edges) to show analytical information (e.g., frequencies).
+            width_mode : one of SIZE_MODES for hierarchy lines, or None to take the graph default
         """
 
         super(LinkGraphicsItem, self).__init__(None)
@@ -9246,6 +9061,7 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
         self.to_widget = to_widget
         self.text = f"{from_widget.text} - {to_widget.text}"
         self.line_width = line_width
+        self.width_mode = width_mode if width_mode in SIZE_MODES else None
         # Cannot select or drag line.
         self.setFlag(QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.RightButton)
@@ -9312,6 +9128,9 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
             if scene is not None and getattr(scene, 'parent', None) is not None:
                 if hasattr(scene.parent, '_save_undo_state'):
                     scene.parent._save_undo_state()
+        # a manual width stops the frequency width of this line
+        if action in (width1_action, width2_action, width4_action, width6_action):
+            self.width_mode = "none"
         # Grosor. Thickness
         if action == width1_action:
             self.line_width = 1
@@ -9363,27 +9182,10 @@ class LinkGraphicsItem(QtWidgets.QGraphicsLineItem):
     def calculate_points_and_draw(self):
         """ Cálculo fluido de intersección perimetral. Smooth calculation of the perimeter intersection """
 
-        c1 = self.from_widget.sceneBoundingRect().center()
-        c2 = self.to_widget.sceneBoundingRect().center()
-
         # Enviar la línea detrás de los nodos visualmente. Send the line behind the nodes visually
         self.setZValue(-1)
-
-        is_ellipse_from = getattr(self.from_widget, 'is_ellipse', False)
-        is_ellipse_to = getattr(self.to_widget, 'is_ellipse', False)
-
-        rect1 = self.from_widget.sceneBoundingRect()
-        rect2 = self.to_widget.sceneBoundingRect()
-
-        # the former inner get_edge_point() (and its local "import math")
-        # was hoisted to the module-level compute_edge_point helper shared with
-        # FreeLineGraphicsItem, so both line classes use one geometry source.
-        if rect1.intersects(rect2):
-            p1 = c1
-            p2 = c2
-        else:
-            p1 = compute_edge_point(c1, c2, rect1, is_ellipse_from)
-            p2 = compute_edge_point(c2, c1, rect2, is_ellipse_to)
+        # line ends shared with FreeLineGraphicsItem
+        p1, p2 = cached_line_end_points(self)
 
         color_obj = safe_color(self.color)  # tolerant color lookup
         self.setPen(QtGui.QPen(color_obj, self.line_width, self.line_type))

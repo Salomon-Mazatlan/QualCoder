@@ -163,6 +163,22 @@ Warning. No Undo option.</string>
        <string/>
       </property>
      </widget>
+     <widget class="QPushButton" name="pushButton_org_graph">
+      <property name="geometry">
+       <rect>
+        <x>160</x>
+        <y>3</y>
+        <width>28</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Organize graph</string>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+     </widget>
     </widget>
    </item>
    <item row="1" column="0">
@@ -185,6 +201,7 @@ Warning. No Undo option.</string>
   <tabstop>pushButton_create_category</tabstop>
   <tabstop>pushButton_create_code</tabstop>
   <tabstop>pushButton_import_codebook</tabstop>
+  <tabstop>pushButton_org_graph</tabstop>
   <tabstop>pushButton_export</tabstop>
   <tabstop>graphicsView</tabstop>
  </tabstops>

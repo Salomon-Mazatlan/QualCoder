@@ -52,6 +52,10 @@ class Ui_DialogOrganiser(object):
         self.pushButton_import_codebook.setGeometry(QtCore.QRect(130, 3, 28, 28))
         self.pushButton_import_codebook.setText("")
         self.pushButton_import_codebook.setObjectName("pushButton_import_codebook")
+        self.pushButton_org_graph = QtWidgets.QPushButton(parent=self.groupBox_header)
+        self.pushButton_org_graph.setGeometry(QtCore.QRect(160, 3, 28, 28))
+        self.pushButton_org_graph.setText("")
+        self.pushButton_org_graph.setObjectName("pushButton_org_graph")
         self.gridLayout.addWidget(self.groupBox_header, 0, 0, 1, 1)
         self.graphicsView = QtWidgets.QGraphicsView(parent=DialogOrganiser)
         self.graphicsView.setLayoutDirection(QtCore.Qt.LayoutDirection.RightToLeft)
@@ -65,7 +69,8 @@ class Ui_DialogOrganiser(object):
         DialogOrganiser.setTabOrder(self.pushButton_selectbranch, self.pushButton_create_category)
         DialogOrganiser.setTabOrder(self.pushButton_create_category, self.pushButton_create_code)
         DialogOrganiser.setTabOrder(self.pushButton_create_code, self.pushButton_import_codebook)
-        DialogOrganiser.setTabOrder(self.pushButton_import_codebook, self.pushButton_export)
+        DialogOrganiser.setTabOrder(self.pushButton_import_codebook, self.pushButton_org_graph)
+        DialogOrganiser.setTabOrder(self.pushButton_org_graph, self.pushButton_export)
         DialogOrganiser.setTabOrder(self.pushButton_export, self.graphicsView)
 
     def retranslateUi(self, DialogOrganiser):
@@ -81,3 +86,4 @@ class Ui_DialogOrganiser(object):
         self.pushButton_apply.setText(_translate("DialogOrganiser", "Apply"))
         self.pushButton_create_code.setToolTip(_translate("DialogOrganiser", "Add code"))
         self.pushButton_import_codebook.setToolTip(_translate("DialogOrganiser", "Import and edit codebook"))
+        self.pushButton_org_graph.setToolTip(_translate("DialogOrganiser", "Organize graph"))

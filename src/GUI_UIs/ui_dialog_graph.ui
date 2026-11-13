@@ -172,11 +172,27 @@
        <string/>
       </property>
      </widget>
+     <widget class="QPushButton" name="pushButton_appearance">
+      <property name="geometry">
+       <rect>
+        <x>10</x>
+        <y>290</y>
+        <width>28</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Appearance</string>
+      </property>
+      <property name="text">
+       <string/>
+      </property>
+     </widget>
      <widget class="QPushButton" name="pushButton_remove_nodes">
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>360</y>
+        <y>390</y>
         <width>28</width>
         <height>28</height>
        </rect>
@@ -192,7 +208,7 @@
       <property name="geometry">
        <rect>
         <x>10</x>
-        <y>310</y>
+        <y>340</y>
         <width>28</width>
         <height>28</height>
        </rect>
@@ -223,10 +239,26 @@
      <property name="title">
       <string/>
      </property>
+     <widget class="QCheckBox" name="checkBox_quick_relations">
+      <property name="geometry">
+       <rect>
+        <x>365</x>
+        <y>3</y>
+        <width>150</width>
+        <height>28</height>
+       </rect>
+      </property>
+      <property name="toolTip">
+       <string>Quick relations</string>
+      </property>
+      <property name="text">
+       <string>Quick Relations</string>
+      </property>
+     </widget>
      <widget class="QPushButton" name="pushButton_export">
       <property name="geometry">
        <rect>
-        <x>390</x>
+        <x>530</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -274,7 +306,7 @@
      <widget class="QPushButton" name="pushButton_savegraph">
       <property name="geometry">
        <rect>
-        <x>530</x>
+        <x>670</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -290,7 +322,7 @@
      <widget class="QPushButton" name="pushButton_loadgraph">
       <property name="geometry">
        <rect>
-        <x>560</x>
+        <x>700</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -307,7 +339,7 @@ Right-click for options</string>
      <widget class="QPushButton" name="pushButton_deletegraph">
       <property name="geometry">
        <rect>
-        <x>590</x>
+        <x>730</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -403,7 +435,7 @@ Right-click for options</string>
      <widget class="QPushButton" name="pushButton_clear">
       <property name="geometry">
        <rect>
-        <x>650</x>
+        <x>790</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -483,7 +515,7 @@ Right-click for options</string>
      <widget class="QPushButton" name="pushButton_export_pdf">
       <property name="geometry">
        <rect>
-        <x>420</x>
+        <x>560</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -499,7 +531,7 @@ Right-click for options</string>
      <widget class="QPushButton" name="pushButton_export_drawio">
       <property name="geometry">
        <rect>
-        <x>450</x>
+        <x>590</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -534,7 +566,7 @@ Right-click for options</string>
      <widget class="QPushButton" name="pushButton_export_graph_summary">
       <property name="geometry">
        <rect>
-        <x>480</x>
+        <x>620</x>
         <y>3</y>
         <width>28</width>
         <height>28</height>
@@ -572,6 +604,7 @@ Right-click for options</string>
   <tabstop>pushButton_codes_of_av</tabstop>
   <tabstop>pushButton_memos_of_file</tabstop>
   <tabstop>pushButton_reveal</tabstop>
+  <tabstop>checkBox_quick_relations</tabstop>
   <tabstop>pushButton_export</tabstop>
   <tabstop>pushButton_clear</tabstop>
   <tabstop>pushButton_savegraph</tabstop>

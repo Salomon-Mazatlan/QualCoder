@@ -3210,22 +3210,28 @@ Click "Yes" to start now.')
                     "unique(name))")
         cur.execute("CREATE TABLE stored_sql (title text, description text, grouper text, ssql text, unique(title))")
         # Tables to store graph. sqlite 0 is False 1 is True
+        # Database version v18. Graph appearance columns
         cur.execute("CREATE TABLE graph (grid integer primary key, name text, description text, "
-                    "date text, scene_width integer, scene_height integer, unique(name));")
+                    "date text, scene_width integer, scene_height integer, node_shape text, node_size_mode text, "
+                    "line_width_mode text, unique(name));")
         cur.execute("CREATE TABLE gr_cdct_text_item (gtextid integer primary key, grid integer, x integer, y integer, "
                     "supercatid integer, catid integer, cid integer, font_size integer, bold integer, "
-                    "isvisible integer, displaytext text);")
+                    "isvisible integer, displaytext text, shape text, size_mode text, text_width real);")
         cur.execute("CREATE TABLE gr_case_text_item (gcaseid integer primary key, grid integer, x integer, "
-                    "y integer, caseid integer, font_size integer, bold integer, color text, displaytext text);")
+                    "y integer, caseid integer, font_size integer, bold integer, color text, displaytext text, "
+                    "text_width real);")
         cur.execute("CREATE TABLE gr_file_text_item (gfileid integer primary key, grid integer, x integer, "
-                    "y integer, fid integer, font_size integer, bold integer, color text, displaytext text);")
+                    "y integer, fid integer, font_size integer, bold integer, color text, displaytext text, "
+                    "text_width real);")
         cur.execute("CREATE TABLE gr_free_text_item (gfreeid integer primary key, grid integer, freetextid integer,"
                     "x integer, y integer, free_text text, font_size integer, bold integer, color text,"
-                    "tooltip text, ctid integer,memo_ctid integer, memo_imid integer, memo_avid integer);")
+                    "tooltip text, ctid integer,memo_ctid integer, memo_imid integer, memo_avid integer, "
+                    "text_width real);")
         # Database version v17. Label and arrow_mode columns on line items
         cur.execute("CREATE TABLE gr_cdct_line_item (glineid integer primary key, grid integer, "
                     "fromcatid integer, fromcid integer, tocatid integer, tocid integer, color text, "
-                    "linewidth real, linetype text, isvisible integer, label text, arrow_mode text);")
+                    "linewidth real, linetype text, isvisible integer, label text, arrow_mode text, "
+                    "width_mode text);")
         cur.execute("CREATE TABLE gr_free_line_item (gflineid integer primary key, grid integer, "
                     "fromfreetextid integer, fromcatid integer, fromcid integer, fromcaseid integer,"
                     "fromfileid integer, fromimid integer, fromavid integer, tofreetextid integer, tocatid integer, "
@@ -3234,10 +3240,10 @@ Click "Yes" to start now.')
         # Database version v17. Memo nodes on graphs
         cur.execute("CREATE TABLE gr_memo_item (gmemoid integer primary key, grid integer, "
                     "memo_source_type text, memo_source_id integer, x integer, y integer, "
-                    "color text, font_size integer);")
+                    "color text, font_size integer, text_width real);")
         cur.execute("CREATE TABLE gr_pix_item (grpixid integer primary key, grid integer, imid integer,"
                     "x integer, y integer, px integer, py integer, w integer, h integer, filepath text,"
-                    "tooltip text, pdf_page integer);")
+                    "tooltip text, pdf_page integer, display_width real);")
         cur.execute("CREATE TABLE gr_av_item (gr_avid integer primary key, grid integer, avid integer,"
                     "x integer, y integer, pos0 integer, pos1 integer, filepath text, tooltip text, color text);")
         cur.execute("CREATE TABLE ris (risid integer, tag text, longtag text, value text);")
@@ -3245,7 +3251,7 @@ Click "Yes" to start now.')
         cur.execute("CREATE TABLE files_filter (filterid integer primary key, name text, filter text, owner text);")
         self.app.update_coder_names()  # Create table coder_names, add current coder, create views, etc.
         cur.execute("INSERT INTO project VALUES(?,?,?,?,?,?,?,?,null,null,null)",
-                    ('v17', datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"), '', self.app.version, 0,
+                    ('v18', datetime.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"), '', self.app.version, 0,
                      0, self.app.settings['codername'], ""))
         self.app.conn.commit()
         try:
@@ -3782,6 +3788,25 @@ Click "Yes" to start now.')
             cur.execute('update project set databaseversion="v17", about=?', [self.app.version])
             self.app.conn.commit()
             self.ui.textEdit.append(_("Updating database to version") + " v17")
+        # Database version v18. Graph appearance: node shape, size and line width modes, resized item widths
+        graph_columns_v18 = (("graph", "node_shape", "text"), ("graph", "node_size_mode", "text"),
+                             ("graph", "line_width_mode", "text"),
+                             ("gr_cdct_text_item", "shape", "text"), ("gr_cdct_text_item", "size_mode", "text"),
+                             ("gr_cdct_text_item", "text_width", "real"),
+                             ("gr_cdct_line_item", "width_mode", "text"),
+                             ("gr_case_text_item", "text_width", "real"), ("gr_file_text_item", "text_width", "real"),
+                             ("gr_free_text_item", "text_width", "real"), ("gr_memo_item", "text_width", "real"),
+                             ("gr_pix_item", "display_width", "real"))
+        db18_update = False
+        for table_name, column_name, column_type in graph_columns_v18:
+            cur.execute(f"pragma table_info({table_name})")
+            if column_name not in [row[1] for row in cur.fetchall()]:
+                cur.execute(f"alter table {table_name} add {column_name} {column_type}")
+                db18_update = True
+        if db18_update:
+            cur.execute('update project set databaseversion="v18", about=?', [self.app.version])
+            self.app.conn.commit()
+            self.ui.textEdit.append(_("Updating database to version") + " v18")
         # Delete codings (fid, id) that do not have a matching source id
         sql = "select fid from code_text where fid not in (select source.id from source)"
         cur.execute(sql)
