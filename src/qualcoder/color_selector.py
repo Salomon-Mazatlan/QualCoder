@@ -210,7 +210,6 @@ class DialogColorSelect(QtWidgets.QDialog):
     def __init__(self, app, code_, parent=None):
 
         super(DialogColorSelect, self).__init__(parent)
-        QtWidgets.QDialog.__init__(self)
         self.ui = Ui_Dialog_colour_selector()
         self.ui.setupUi(self)
         self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowType.WindowContextHelpButtonHint)
